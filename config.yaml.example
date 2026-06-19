@@ -1,0 +1,25 @@
+http:
+  addr: "0.0.0.0:8200"
+
+logger:
+  level: "info"   # debug | info | warning | error
+
+aiops_ml:
+  base_url: "http://aiops-ml:8100"
+  timeout: "60s"
+  enabled: true    # false = skip ML, วิเคราะห์ด้วย Ollama อย่างเดียว
+
+ollama:
+  base_url: "http://localhost:11434"
+  model: "qwen2.5:14b"       # ปรับตาม model ที่ deploy ไว้
+  timeout: "120s"
+  temperature: 0.1            # ต่ำ = consistent, factual
+
+analysis:
+  max_log_entries: 500        # cap per request ป้องกัน OOM
+  severity_filter: "warn"     # รับเฉพาะ warn ขึ้นไป (info = เยอะเกิน)
+  health_score:
+    critical_weight: 2.0      # error/fatal นับหนักกว่า warn
+    warn_weight: 1.0
+    score_floor: 0.0
+    score_ceiling: 100.0

@@ -1,0 +1,19 @@
+# Config with local values (commit only config.yaml.example)
+config.yaml
+
+# Database
+*.db
+log_analyzer.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store

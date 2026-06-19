@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>log-analyzer — GodEye AIOps</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #0b1120; font-family: 'Inter', system-ui, sans-serif; }
+
+    /* Score ring */
+    .score-ring { position: relative; width: 120px; height: 120px; }
+    .score-ring svg { transform: rotate(-90deg); }
+    .score-ring .track { fill: none; stroke: #1e293b; stroke-width: 10; }
+    .score-ring .fill  { fill: none; stroke-width: 10; stroke-linecap: round;
+                         transition: stroke-dashoffset 1.2s cubic-bezier(.4,0,.2,1),
+                                     stroke 0.6s ease; }
+    .score-ring .label { position: absolute; inset: 0; display: flex;
+                         flex-direction: column; align-items: center;
+                         justify-content: center; line-height: 1; }
+    .score-ring .label span:first-child { font-size: 1.75rem; font-weight: 700; }
+    .score-ring .label span:last-child  { font-size: 0.65rem; color: #64748b; margin-top: 2px; }
+
+    /* Status badge pulse */
+    @keyframes pulse-red   { 0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.5)}  50%{box-shadow:0 0 0 6px rgba(239,68,68,0)} }
+    @keyframes pulse-amber { 0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.5)} 50%{box-shadow:0 0 0 6px rgba(245,158,11,0)} }
+    @keyframes pulse-green { 0%,100%{box-shadow:0 0 0 0 rgba(34,197,94,.5)}  50%{box-shadow:0 0 0 6px rgba(34,197,94,0)} }
+    .badge-critical { animation: pulse-red   2s infinite; }
+    .badge-warning  { animation: pulse-amber 2s infinite; }
+    .badge-ok       { animation: pulse-green 3s infinite; }
+
+    /* Fade in */
+    @keyframes fadeUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:none} }
+    .fade-up { animation: fadeUp 0.4s ease both; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #0b1120; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+
+    /* Drop zone */
+    .drop-zone { border: 2px dashed #334155; transition: border-color .2s, background .2s; }
+    .drop-zone.drag-over { border-color: #3b82f6; background: rgba(59,130,246,.05); }
+
+    /* Skeleton */
+    @keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+    .skeleton { background: linear-gradient(90deg,#1e293b 25%,#273548 50%,#1e293b 75%);
+                background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 6px; }
+
+    /* Cause/action pills */
+    .cause-pill   { background: rgba(239,68,68,.1);  border: 1px solid rgba(239,68,68,.25); }
+    .action-pill  { background: rgba(59,130,246,.1); border: 1px solid rgba(59,130,246,.25); }
+    .metric-pill  { background: rgba(168,85,247,.1); border: 1px solid rgba(168,85,247,.25); }
+
+    /* Prediction risk card */
+    .risk-critical { background: rgba(239,68,68,.08);  border-color: rgba(239,68,68,.3); }
+    .risk-high     { background: rgba(249,115,22,.08); border-color: rgba(249,115,22,.3); }
+    .risk-medium   { background: rgba(245,158,11,.08); border-color: rgba(245,158,11,.3); }
+    .risk-low      { background: rgba(34,197,94,.08);  border-color: rgba(34,197,94,.3);  }
+
+    /* Trend arrow */
+    .trend-rising  { color: #ef4444; }
+    .trend-falling { color: #22c55e; }
+    .trend-stable  { color: #64748b; }
+    .trend-unknown { color: #475569; }
+
+    /* Confidence bar */
+    .conf-bar-fill { transition: width 1s cubic-bezier(.4,0,.2,1); }
+
+    /* Signal pills */
+    .signal-pill { background: rgba(99,102,241,.1); border: 1px solid rgba(99,102,241,.2); }
+
+    /* Fingerprint badge */
+    .fp-badge { background: rgba(168,85,247,.15); border: 1px solid rgba(168,85,247,.4); }
+  </style>
+</head>
+<body class="min-h-screen text-slate-200">
+
+<!-- ───── NAV ───── -->
+<nav class="sticky top-0 z-50 border-b border-slate-800 bg-[#0b1120]/90 backdrop-blur">
+  <div class="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center text-xs font-bold">LA</div>
+      <span class="font-semibold text-slate-100">log-analyzer</span>
+      <span class="text-slate-600 text-sm">/ GodEye AIOps</span>
+    </div>
+    <div id="navStatus" class="flex items-center gap-4 text-sm text-slate-400">
+      <span id="ollamaStatus" class="flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-slate-600"></span> checking…
+      </span>
+      <span id="modelLabel" class="text-slate-600 text-xs font-mono"></span>
+    </div>
+  </div>
+</nav>
+
+<div class="max-w-7xl mx-auto px-4 py-8 space-y-8">
+
+  <!-- ───── UPLOAD PANEL ───── -->
+  <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
+    <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">Analyze Logs</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+      <!-- Drop zone -->
+      <div id="dropZone" class="drop-zone rounded-lg p-6 text-center cursor-pointer select-none" onclick="document.getElementById('fileInput').click()">
+        <input type="file" id="fileInput" accept=".jsonl,.json,.log" class="hidden" onchange="handleFileUpload(this)">
+        <div class="text-3xl mb-2">📂</div>
+        <p class="text-slate-300 text-sm font-medium">Drop GodEyes export (.jsonl) here</p>
+        <p class="text-slate-600 text-xs mt-1">or click to browse</p>
+        <div id="fileInfo" class="mt-3 text-xs text-blue-400 hidden"></div>
+      </div>
+
+      <!-- Controls -->
+      <div class="flex flex-col justify-between gap-3">
+        <div>
+          <label class="text-xs text-slate-500 uppercase tracking-wide block mb-1">Tenant ID</label>
+          <input id="tenantInput" value="internal" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500" />
+        </div>
+        <div class="flex gap-2">
+          <button onclick="runAnalysis()" id="analyzeBtn"
+            class="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors">
+            ▶ Analyze
+          </button>
+          <button onclick="loadSample()"
+            class="bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors">
+            Sample
+          </button>
+        </div>
+        <div id="statusMsg" class="text-xs text-slate-500 min-h-[1rem]"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───── RESULTS (hidden until analyzed) ───── -->
+  <div id="results" class="hidden space-y-6">
+
+    <!-- Summary bar -->
+    <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-6 fade-up">
+      <div class="flex flex-col md:flex-row items-center md:items-start gap-6">
+
+        <!-- Score ring -->
+        <div class="score-ring flex-shrink-0">
+          <svg viewBox="0 0 120 120" width="120" height="120">
+            <circle class="track" cx="60" cy="60" r="50"></circle>
+            <circle id="scoreFill" class="fill" cx="60" cy="60" r="50"
+              stroke-dasharray="314.16" stroke-dashoffset="314.16"></circle>
+          </svg>
+          <div class="label">
+            <span id="scoreNum" class="text-white">—</span>
+            <span>/ 100</span>
+          </div>
+        </div>
+
+        <!-- Summary text -->
+        <div class="flex-1 text-center md:text-left">
+          <div class="flex items-center justify-center md:justify-start gap-3 mb-3">
+            <span id="statusBadge" class="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-widest"></span>
+            <span id="windowLabel" class="text-xs text-slate-500 font-mono"></span>
+          </div>
+          <p id="summaryText" class="text-slate-300 text-sm leading-relaxed"></p>
+          <div class="flex flex-wrap gap-4 mt-4 text-xs text-slate-500">
+            <span id="hostsCount"></span>
+            <span id="analyzedAt"></span>
+            <span id="sourcesLabel"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Prediction summary banner -->
+    <div id="predBanner" class="rounded-xl border p-5 fade-up hidden">
+      <div class="flex flex-col md:flex-row md:items-center gap-4">
+        <div class="flex-shrink-0 text-center md:text-left">
+          <div id="predIcon" class="text-4xl mb-1"></div>
+          <div id="predRiskLabel" class="text-xs font-bold uppercase tracking-widest"></div>
+        </div>
+        <div class="flex-1 min-w-0">
+          <p id="predRecommendation" class="text-sm font-semibold text-slate-100 mb-2"></p>
+          <div id="predSignals" class="flex flex-wrap gap-2"></div>
+        </div>
+        <div class="flex-shrink-0 text-right min-w-[140px]">
+          <p class="text-xs text-slate-500 mb-1">Confidence</p>
+          <div class="w-full bg-slate-800 rounded-full h-2 mb-1">
+            <div id="predConfBar" class="conf-bar-fill h-2 rounded-full w-0"></div>
+          </div>
+          <p id="predConfLabel" class="text-xs font-mono text-slate-400"></p>
+          <p id="predTimeEst" class="text-xs text-amber-400 mt-2 font-semibold"></p>
+          <p id="predFingerprint" class="text-xs mt-1"></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Host cards -->
+    <div id="hostsGrid" class="space-y-4"></div>
+
+  </div><!-- /results -->
+
+  <!-- Loading skeleton -->
+  <div id="skeleton" class="hidden space-y-6">
+    <div class="skeleton h-36 w-full rounded-xl"></div>
+    <div class="skeleton h-64 w-full rounded-xl"></div>
+  </div>
+
+</div><!-- /container -->
+
+<script>
+// ───────────────── state ─────────────────
+let pendingEntries = null;
+
+// ───────────────── helpers ─────────────────
+const $ = id => document.getElementById(id);
+
+function statusColor(s) {
+  return s === 'critical' ? '#ef4444' : s === 'warning' ? '#f59e0b' : '#22c55e';
+}
+function statusBadgeClass(s) {
+  return s === 'critical' ? 'bg-red-500/20 text-red-400 badge-critical'
+       : s === 'warning'  ? 'bg-amber-500/20 text-amber-400 badge-warning'
+       :                    'bg-green-500/20 text-green-400 badge-ok';
+}
+function statusIcon(s) {
+  return s === 'critical' ? '🔴' : s === 'warning' ? '🟡' : '🟢';
+}
+function fmt(dt) {
+  return new Date(dt).toLocaleString('th-TH', {
+    year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit'
+  });
+}
+function scoreColor(n) {
+  if (n < 40) return '#ef4444';
+  if (n < 70) return '#f59e0b';
+  return '#22c55e';
+}
+
+function animateScore(target) {
+  const circ   = 2 * Math.PI * 50; // 314.16
+  const fill   = $('scoreFill');
+  const numEl  = $('scoreNum');
+  const pct    = Math.max(0, Math.min(100, target));
+  const offset = circ - (pct / 100) * circ;
+  fill.style.stroke            = scoreColor(pct);
+  fill.style.strokeDashoffset  = offset;
+  let cur = 0;
+  const step = () => {
+    cur = Math.min(cur + 2, pct);
+    numEl.textContent = cur.toFixed(1);
+    if (cur < pct) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+// ───────────────── health check ─────────────────
+async function checkHealth() {
+  try {
+    const r = await fetch('/healthz');
+    const d = await r.json();
+    const ok = d.ollama === 'reachable';
+    $('ollamaStatus').innerHTML =
+      `<span class="w-2 h-2 rounded-full ${ok ? 'bg-green-500' : 'bg-red-500'}"></span>
+       Ollama: ${d.ollama}`;
+    $('modelLabel').textContent = d.ollama_model;
+  } catch { }
+}
+
+// ───────────────── file upload ─────────────────
+function handleFileUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const lines = e.target.result.split('\n').filter(l => l.trim());
+    const entries = [];
+    lines.forEach(l => { try { entries.push(JSON.parse(l)); } catch {} });
+    pendingEntries = entries;
+    $('fileInfo').textContent = `✓ ${file.name} — ${entries.length.toLocaleString()} records loaded`;
+    $('fileInfo').classList.remove('hidden');
+    $('statusMsg').textContent = `Ready: ${entries.filter(e=>e.type==='log').length} log entries`;
+  };
+  reader.readAsText(file);
+}
+
+// drop zone drag events
+const dz = $('dropZone');
+['dragover','dragenter'].forEach(ev => dz.addEventListener(ev, e => {
+  e.preventDefault(); dz.classList.add('drag-over');
+}));
+['dragleave','drop'].forEach(ev => dz.addEventListener(ev, e => {
+  e.preventDefault(); dz.classList.remove('drag-over');
+}));
+dz.addEventListener('drop', e => {
+  const file = e.dataTransfer.files[0];
+  if (file) {
+    const input = $('fileInput');
+    const dt = new DataTransfer(); dt.items.add(file); input.files = dt.files;
+    handleFileUpload(input);
+  }
+});
+
+// ───────────────── sample data ─────────────────
+function loadSample() {
+  pendingEntries = SAMPLE_ENTRIES;
+  $('fileInfo').textContent = `✓ sample data — ${SAMPLE_ENTRIES.length} records loaded`;
+  $('fileInfo').classList.remove('hidden');
+  $('statusMsg').textContent = 'Sample ready — click Analyze';
+}
+
+// ───────────────── run analysis ─────────────────
+async function runAnalysis() {
+  if (!pendingEntries || pendingEntries.length === 0) {
+    $('statusMsg').textContent = '⚠ Please upload a file or load sample data first.';
+    return;
+  }
+
+  const btn = $('analyzeBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Analyzing…';
+  $('statusMsg').textContent = 'Sending to AI… this may take a minute';
+  $('results').classList.add('hidden');
+  $('skeleton').classList.remove('hidden');
+
+  try {
+    const res = await fetch('/ingest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        entries: pendingEntries,
+        tenant_id: $('tenantInput').value || 'internal',
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || err.error || `HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    renderResults(data);
+    $('statusMsg').textContent = '';
+  } catch (err) {
+    $('statusMsg').textContent = `❌ Error: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ Analyze';
+    $('skeleton').classList.add('hidden');
+  }
+}
+
+// ───────────────── render ─────────────────
+function renderResults(d) {
+  // summary
+  animateScore(d.health_score);
+
+  const badge = $('statusBadge');
+  badge.textContent = d.status.toUpperCase();
+  badge.className = `px-3 py-1 rounded-full text-xs font-bold uppercase tracking-widest ${statusBadgeClass(d.status)}`;
+
+  const wf = new Date(d.window.from);
+  const wt = new Date(d.window.to);
+  $('windowLabel').textContent =
+    `${wf.toISOString().slice(0,16).replace('T',' ')} → ${wt.toISOString().slice(0,16).replace('T',' ')} UTC`;
+
+  $('summaryText').textContent = d.summary;
+  $('hostsCount').textContent  = `${d.hosts.length} host${d.hosts.length>1?'s':''} analyzed`;
+  $('analyzedAt').textContent  = `Analyzed at ${fmt(d.analyzed_at)}`;
+  $('sourcesLabel').innerHTML  =
+    `<span class="${d.sources.ollama_used ? 'text-blue-400' : 'text-slate-600'}">Ollama: ${d.sources.ollama_model}</span>` +
+    ` · <span class="${d.sources.aiops_ml_used ? 'text-purple-400' : 'text-slate-600'}">aiops-ml: ${d.sources.aiops_ml_used ? 'on' : 'off'}</span>`;
+
+  // prediction banner — take worst prediction across all hosts
+  const worstHost = d.hosts.reduce((a,b) => {
+    const rank = {critical:4,high:3,medium:2,low:1,undefined:0};
+    return (rank[b.prediction?.risk_level]||0) > (rank[a.prediction?.risk_level]||0) ? b : a;
+  }, d.hosts[0]);
+  renderPredBanner(worstHost?.prediction);
+
+  // host cards
+  const grid = $('hostsGrid');
+  grid.innerHTML = '';
+  d.hosts.forEach((h, i) => {
+    grid.insertAdjacentHTML('beforeend', hostCard(h, i));
+  });
+
+  $('results').classList.remove('hidden');
+}
+
+function hostCard(h, idx) {
+  const col   = scoreColor(h.health_score);
+  const delay = idx * 80;
+  const pct   = Math.max(0, Math.min(100, h.health_score));
+  const trend = h.trend;
+  const pred  = h.prediction;
+
+  const topErrors = h.top_errors.slice(0, 5).map(e => `
+    <div class="flex items-start gap-3 py-2 border-b border-slate-800 last:border-0">
+      <span class="mt-0.5 px-1.5 py-0.5 rounded text-xs font-mono bg-red-900/40 text-red-300 flex-shrink-0">${e.count}×</span>
+      <div class="min-w-0">
+        <p class="text-slate-300 text-xs leading-relaxed truncate" title="${escHtml(e.msg)}">${escHtml(e.msg)}</p>
+        <p class="text-slate-600 text-xs mt-0.5">${new Date(e.first_seen).toISOString().slice(11,19)} → ${new Date(e.last_seen).toISOString().slice(11,19)} UTC</p>
+      </div>
+    </div>`).join('');
+
+  const causes  = (h.explanation?.likely_causes || []).map(c =>
+    `<span class="cause-pill text-red-300 text-xs px-2.5 py-1 rounded-full">${escHtml(c)}</span>`).join('');
+  const actions = (h.explanation?.suggested_actions || []).map((a,i) =>
+    `<div class="flex items-start gap-2 text-xs text-slate-300">
+      <span class="text-blue-400 font-mono flex-shrink-0">${i+1}.</span>
+      <span>${escHtml(a)}</span>
+    </div>`).join('');
+  const metrics = (h.explanation?.affected_metrics || []).map(m =>
+    `<span class="metric-pill text-purple-300 text-xs px-2.5 py-1 rounded-full">${escHtml(m)}</span>`).join('');
+
+  const anomalyHtml = h.anomalies.length ? `
+    <div class="mt-4">
+      <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Anomalies (ML)</p>
+      ${h.anomalies.map(a => `
+        <div class="flex items-center gap-3 text-xs py-1.5 border-b border-slate-800">
+          <span class="text-slate-400 font-mono">${escHtml(a.metric)}</span>
+          <span class="ml-auto ${a.score>0.7?'text-red-400':a.score>0.4?'text-amber-400':'text-green-400'}">score ${a.score.toFixed(2)}</span>
+          <span class="text-slate-600">${a.severity}</span>
+        </div>`).join('')}
+    </div>` : '';
+
+  // trend section
+  const trendHtml = trend ? (() => {
+    const arrow = trendArrow(trend.direction);
+    const cls   = trendClass(trend.direction);
+    const anomBadges = (trend.anomaly_types||[]).map(t =>
+      `<span class="text-xs px-2 py-0.5 rounded font-mono ${
+        t==='spike'?'bg-red-900/40 text-red-300':
+        t==='drift'?'bg-orange-900/40 text-orange-300':
+        t==='pattern'?'bg-purple-900/40 text-purple-300':
+        'bg-slate-800 text-slate-400'}">${t}</span>`
+    ).join('');
+    return `
+      <div class="mt-4 pt-4 border-t border-slate-800">
+        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Trend (${trend.windows_analyzed} windows)</p>
+        <div class="flex items-center gap-3 mb-2">
+          <span class="text-2xl font-bold ${cls}">${arrow}</span>
+          <div>
+            <p class="text-sm font-semibold ${cls} capitalize">${trend.direction}</p>
+            <p class="text-xs text-slate-500">${(trend.slope_per_hour*100).toFixed(2)}%/hr error rate</p>
+          </div>
+          <div class="ml-auto flex flex-wrap gap-1">${anomBadges || '<span class="text-xs text-slate-600">no anomaly</span>'}</div>
+        </div>
+        ${trend.baseline_comparison ? `<p class="text-xs text-slate-500">vs baseline: <span class="text-slate-300">${escHtml(trend.baseline_comparison)}</span>${trend.z_score!=null?' · z='+trend.z_score:''}</p>` : ''}
+      </div>`;
+  })() : '';
+
+  // prediction section (compact, inside card)
+  const predHtml = pred ? (() => {
+    const riskColors = {critical:'text-red-400',high:'text-orange-400',medium:'text-amber-400',low:'text-green-400'};
+    const confPct = Math.round(pred.confidence * 100);
+    const barColor = {critical:'#ef4444',high:'#f97316',medium:'#f59e0b',low:'#22c55e'}[pred.risk_level] || '#64748b';
+    return `
+      <div class="mt-4 pt-4 border-t border-slate-800">
+        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Prediction</p>
+        <div class="flex items-center gap-3 mb-2">
+          <span class="font-bold text-sm uppercase ${riskColors[pred.risk_level]||''}">${pred.risk_level} risk</span>
+          <div class="flex-1 bg-slate-800 rounded-full h-1.5 overflow-hidden">
+            <div class="h-full rounded-full" style="width:${confPct}%;background:${barColor}"></div>
+          </div>
+          <span class="text-xs text-slate-400 font-mono">${confPct}%</span>
+        </div>
+        ${pred.estimated_incident_in ? `<p class="text-xs text-amber-400 font-semibold mb-1">⏱ Estimated incident in ${escHtml(pred.estimated_incident_in)}</p>` : ''}
+        ${pred.matched_fingerprint   ? `<p class="text-xs mb-2"><span class="fp-badge text-purple-300 px-2 py-0.5 rounded text-xs">🔎 ${escHtml(pred.matched_fingerprint)}</span></p>` : ''}
+      </div>`;
+  })() : '';
+
+  return `
+  <div class="rounded-xl border border-slate-800 bg-slate-900/60 overflow-hidden fade-up"
+       style="animation-delay:${delay}ms">
+
+    <!-- Card header -->
+    <div class="flex items-center gap-4 p-5 border-b border-slate-800 cursor-pointer select-none"
+         onclick="toggleCard('card-${idx}')">
+      <div class="text-xl">${statusIcon(h.status)}</div>
+      <div class="flex-1 min-w-0">
+        <p class="font-semibold text-slate-100 text-sm truncate">${escHtml(h.host)}</p>
+        <div class="flex flex-wrap gap-3 mt-1 text-xs text-slate-500">
+          ${h.service_profile ? `<span class="font-mono text-slate-400">${h.service_profile}</span>` : ''}
+          ${h.criticality     ? `<span class="font-mono text-yellow-600">${h.criticality}</span>` : ''}
+          <span>${h.entry_count} entries</span>
+          <span class="text-red-400">${h.error_count} errors</span>
+          <span class="text-amber-400">${h.warn_count} warnings</span>
+        </div>
+      </div>
+
+      <!-- Score + trend arrow -->
+      <div class="flex-shrink-0 text-right">
+        <div class="flex items-end justify-end gap-1.5">
+          <p class="text-2xl font-bold" style="color:${col}">${h.health_score.toFixed(1)}</p>
+          ${trend ? `<span class="text-xl font-bold pb-0.5 ${trendClass(trend.direction)}">${trendArrow(trend.direction)}</span>` : ''}
+        </div>
+        <div class="w-24 h-1.5 bg-slate-800 rounded-full mt-1 overflow-hidden ml-auto">
+          <div class="h-full rounded-full" style="width:${pct}%;background:${col}"></div>
+        </div>
+        <div class="flex items-center justify-end gap-1.5 mt-1">
+          <span class="text-xs px-2 py-0.5 rounded-full font-semibold ${statusBadgeClass(h.status)}">${h.status.toUpperCase()}</span>
+          ${pred ? `<span class="text-xs px-2 py-0.5 rounded-full font-bold ${{critical:'bg-red-500/20 text-red-400',high:'bg-orange-500/20 text-orange-400',medium:'bg-amber-500/20 text-amber-400',low:'bg-green-500/20 text-green-400'}[pred.risk_level]||''}">${pred.risk_level.toUpperCase()}</span>` : ''}
+        </div>
+      </div>
+    </div>
+
+    <!-- Card body -->
+    <div id="card-${idx}" class="grid grid-cols-1 lg:grid-cols-2 gap-0 divide-y lg:divide-y-0 lg:divide-x divide-slate-800">
+
+      <!-- Left: Top errors + trend -->
+      <div class="p-5">
+        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Top Errors</p>
+        ${topErrors || '<p class="text-slate-600 text-xs">No errors in window</p>'}
+        ${anomalyHtml}
+        ${trendHtml}
+        ${predHtml}
+      </div>
+
+      <!-- Right: AI explanation -->
+      <div class="p-5">
+        ${h.explanation ? `
+          <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">AI Root Cause Analysis</p>
+          <p class="text-slate-200 text-sm leading-relaxed mb-4 italic">"${escHtml(h.explanation.summary)}"</p>
+
+          ${causes ? `<p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Likely Causes</p>
+          <div class="flex flex-wrap gap-2 mb-4">${causes}</div>` : ''}
+
+          ${metrics ? `<p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Affected Metrics</p>
+          <div class="flex flex-wrap gap-2 mb-4">${metrics}</div>` : ''}
+
+          ${actions ? `<p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Suggested Actions</p>
+          <div class="space-y-2">${actions}</div>` : ''}
+        ` : '<p class="text-slate-600 text-xs">No AI explanation available</p>'}
+      </div>
+
+    </div>
+  </div>`;
+}
+
+// ───────────────── prediction banner ─────────────────
+function renderPredBanner(pred) {
+  const banner = $('predBanner');
+  if (!pred) { banner.classList.add('hidden'); return; }
+
+  const icons = {critical:'🚨', high:'⚠️', medium:'🔍', low:'✅'};
+  const colors = {
+    critical:'risk-critical text-red-400',
+    high:'risk-high text-orange-400',
+    medium:'risk-medium text-amber-400',
+    low:'risk-low text-green-400'
+  };
+  const barColors = {critical:'#ef4444', high:'#f97316', medium:'#f59e0b', low:'#22c55e'};
+
+  banner.className = `rounded-xl border p-5 fade-up ${colors[pred.risk_level]?.split(' ')[0] || ''}`;
+  $('predIcon').textContent = icons[pred.risk_level] || '❓';
+  $('predRiskLabel').textContent = `${pred.risk_level.toUpperCase()} RISK`;
+  $('predRiskLabel').className = `text-xs font-bold uppercase tracking-widest ${colors[pred.risk_level]?.split(' ')[1] || ''}`;
+  $('predRecommendation').textContent = pred.recommendation;
+
+  // signals
+  $('predSignals').innerHTML = (pred.contributing_signals||[]).map(s =>
+    `<span class="signal-pill text-indigo-300 text-xs px-2.5 py-1 rounded-full">${escHtml(s)}</span>`
+  ).join('');
+
+  // confidence bar
+  const pct = Math.round(pred.confidence * 100);
+  $('predConfBar').style.width = pct + '%';
+  $('predConfBar').style.background = barColors[pred.risk_level] || '#64748b';
+  $('predConfLabel').textContent = `${pct}% confidence`;
+
+  // time estimate
+  $('predTimeEst').textContent = pred.estimated_incident_in
+    ? `⏱ Estimated incident in ${pred.estimated_incident_in}` : '';
+
+  // fingerprint
+  $('predFingerprint').innerHTML = pred.matched_fingerprint
+    ? `<span class="fp-badge text-purple-300 text-xs px-2 py-0.5 rounded">🔎 ${escHtml(pred.matched_fingerprint)}</span>` : '';
+
+  banner.classList.remove('hidden');
+}
+
+// ───────────────── trend helpers ─────────────────
+function trendArrow(direction) {
+  return {rising:'↑', falling:'↓', stable:'→', unknown:'?'}[direction] || '?';
+}
+function trendClass(direction) {
+  return {rising:'trend-rising', falling:'trend-falling', stable:'trend-stable', unknown:'trend-unknown'}[direction] || 'trend-unknown';
+}
+
+function toggleCard(id) {
+  const el = $(id);
+  if (!el) return;
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ───────────────── sample data ─────────────────
+const SAMPLE_ENTRIES = [
+  {"type":"log","asset_id":"38067732","hostname":"DEV_Hyper_Store_Bigc","_time":"2026-05-20T14:21:46Z","host":"POCPOS2008R2.bigc.co.th","service":"MSSQLSERVER","severity_number":"17","severity_text":"err","message":"Login failed for user 'sa'. Reason: Password did not match that for the login provided. [CLIENT: 127.0.0.1]","tenant_id":"internal"},
+  {"type":"log","asset_id":"38067732","hostname":"DEV_Hyper_Store_Bigc","_time":"2026-05-20T14:21:41Z","host":"POCPOS2008R2.bigc.co.th","service":"Service_Control_Manager","severity_number":"17","severity_text":"err","message":"The PMPOS-AGENT service terminated unexpectedly.  It has done this 15133 time(s).  The following corrective action will be taken in 30000 milliseconds: Restart the service.","tenant_id":"internal"},
+  {"type":"log","asset_id":"38067732","hostname":"DEV_Hyper_Store_Bigc","_time":"2026-05-20T14:21:10Z","host":"POCPOS2008R2.bigc.co.th","service":"Service_Control_Manager","severity_number":"17","severity_text":"err","message":"The PMPOS-AGENT service terminated unexpectedly.  It has done this 15132 time(s).  The following corrective action will be taken in 30000 milliseconds: Restart the service.","tenant_id":"internal"},
+  {"type":"log","asset_id":"38067732","hostname":"DEV_Hyper_Store_Bigc","_time":"2026-05-20T14:20:39Z","host":"POCPOS2008R2.bigc.co.th","service":"Service_Control_Manager","severity_number":"17","severity_text":"err","message":"The PMPOS-AGENT service terminated unexpectedly.  It has done this 15131 time(s).  The following corrective action will be taken in 30000 milliseconds: Restart the service.","tenant_id":"internal"},
+  {"type":"log","asset_id":"38067732","hostname":"DEV_Hyper_Store_Bigc","_time":"2026-05-20T14:21:26Z","host":"POCPOS2008R2.bigc.co.th","service":"MSSQLSERVER","severity_number":"17","severity_text":"error","message":"Login failed for user 'sa'. Reason: Password did not match that for the login provided. [CLIENT: 127.0.0.1]","tenant_id":"internal"},
+  {"type":"log","asset_id":"38067732","hostname":"DEV_Hyper_Store_Bigc","_time":"2026-05-20T14:06:37Z","host":"POCPOS2008R2.bigc.co.th","service":"Microsoft-Windows-WMI-Activity","severity_number":"17","severity_text":"error","message":"Id = {050F3CC0-F800-0000-2BC7-6644DEC8DC01}; ClientMachine = POCPOS2008R2; User = NT AUTHORITY\\SYSTEM; ClientProcessId = 1388; Component = Unknown; Operation = Start IWbemServices::ExecQuery - root\\cimv2 : SELECT * FROM meta_class WHERE __class = 'Win32_NetworkAdapter'; ResultCode = 0x80041032; PossibleCause = Unknown","tenant_id":"internal"},
+  {"type":"log","asset_id":"38067732","hostname":"DEV_Hyper_Store_Bigc","_time":"2026-05-20T14:06:42Z","host":"POCPOS2008R2.bigc.co.th","service":"Microsoft-Windows-WMI-Activity","severity_number":"17","severity_text":"error","message":"Id = {050F3CC0-F800-0000-2BC7-6644DEC8DC01}; ClientMachine = POCPOS2008R2; User = NT AUTHORITY\\SYSTEM; ClientProcessId = 1388; Component = Unknown; Operation = Start IWbemServices::ExecQuery - root\\cimv2 : SELECT * FROM meta_class WHERE __class = 'Win32_NetworkAdapter'; ResultCode = 0x80041032; PossibleCause = Unknown","tenant_id":"internal"},
+  {"type":"log","asset_id":"38067732","hostname":"DEV_Hyper_Store_Bigc","_time":"2026-05-20T14:15:00Z","host":"POCPOS2008R2.bigc.co.th","service":"POSSTOREAPI","severity_number":"13","severity_text":"warn","message":"Child process [18408 - pmpos-controller.exe ] finished with -1073741502","tenant_id":"internal"},
+  {"type":"log","asset_id":"38067732","hostname":"DEV_Hyper_Store_Bigc","_time":"2026-05-20T14:10:00Z","host":"POCPOS2008R2.bigc.co.th","service":"POSSTOREAPI","severity_number":"13","severity_text":"warn","message":"Child process [18406 - pmpos-controller.exe ] finished with -1073741502","tenant_id":"internal"},
+  {"type":"log","asset_id":"38067732","hostname":"DEV_Hyper_Store_Bigc","_time":"2026-05-20T14:02:31Z","host":"POCPOS2008R2.bigc.co.th","service":"POSSTOREAPI","severity_number":"13","severity_text":"warn","message":"Child process [18402 - pmpos-controller.exe ] finished with -1073741502","tenant_id":"internal"}
+];
+
+// ───────────────── init ─────────────────
+checkHealth();
+setInterval(checkHealth, 30000);
+</script>
+</body>
+</html>
