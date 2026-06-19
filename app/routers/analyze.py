@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from app.config import config, OLLAMA_TIMEOUT, AIOPS_ML_TIMEOUT
+from app.config import config, OLLAMA_TIMEOUT, AIOPS_ML_TIMEOUT, LOG_ML_TIMEOUT
 from app.models.request import AnalyzeRequest, LogEntry
 from app.models.response import (
     AnalyzeResponse,
@@ -16,6 +16,7 @@ from app.models.response import (
 )
 from app.services import aiops_ml as ml_client
 from app.services import ollama as ollama_client
+from app.services import log_ml_client
 from app.services.aiops_ml import KNOWN_PROFILES
 from app.knowledge.pos import extract_signals_from_messages
 from app.services.baseline_store import WindowStat, save_window_stat
@@ -134,6 +135,39 @@ async def _analyze_host(
         hardware_err_count=sig.get("hardware_err", 0),
         app_crash_count=sig.get("app_crash", 0),
     ))
+
+    # ── log-ml Isolation Forest score ──
+    if config.log_ml.enabled:
+        if_result = await log_ml_client.score_window(
+            host=hostname,
+            tenant_id="internal",
+            window_from=window_from,
+            window_to=window_to,
+            entry_count=len(entries),
+            error_count=error_count,
+            warn_count=warn_count,
+            health_score=health_score,
+            crash_count=sig.get("crash", 0),
+            auth_fail_count=sig.get("auth_fail", 0),
+            payment_fail_count=sig.get("payment_fail", 0),
+            network_err_count=sig.get("network_err", 0),
+            db_err_count=sig.get("db_err", 0),
+            hardware_err_count=sig.get("hardware_err", 0),
+            app_crash_count=sig.get("app_crash", 0),
+            base_url=config.log_ml.base_url,
+            timeout=LOG_ML_TIMEOUT,
+        )
+        if if_result and if_result["is_anomaly"]:
+            raw = if_result["anomaly_score"]   # negative = anomaly, closer to 0 = more anomalous
+            severity = "high" if raw < -0.3 else "medium"
+            anomalies.append(AnomalyScore(
+                metric="isolation_forest",
+                score=round(min(1.0, abs(raw) * 2), 3),
+                severity=severity,
+            ))
+            # recompute health_score with IF anomaly included
+            anomaly_scores = [a.score for a in anomalies]
+            health_score = compute_host_health_score(error_count, warn_count, len(entries), anomaly_scores)
 
     # ── Trend analysis + prediction ──
     trend = analyze_trend(hostname)

@@ -18,6 +18,12 @@ class AiopsMlConfig(BaseModel):
     enabled: bool = True
 
 
+class LogMlConfig(BaseModel):
+    base_url: str = "http://localhost:3050"
+    timeout: str = "10s"
+    enabled: bool = True
+
+
 class OllamaConfig(BaseModel):
     base_url: str = "http://localhost:11434"
     model: str = "qwen2.5:14b"
@@ -42,6 +48,7 @@ class AppConfig(BaseModel):
     http: HttpConfig = HttpConfig()
     logger: LoggerConfig = LoggerConfig()
     aiops_ml: AiopsMlConfig = AiopsMlConfig()
+    log_ml: LogMlConfig = LogMlConfig()
     ollama: OllamaConfig = OllamaConfig()
     analysis: AnalysisConfig = AnalysisConfig()
 
@@ -69,6 +76,7 @@ config = load_config()
 
 OLLAMA_TIMEOUT = _parse_timeout(config.ollama.timeout)
 AIOPS_ML_TIMEOUT = _parse_timeout(config.aiops_ml.timeout)
+LOG_ML_TIMEOUT = _parse_timeout(config.log_ml.timeout)
 
 SEVERITY_THRESHOLD: dict[str, int] = {
     "trace": 1,
