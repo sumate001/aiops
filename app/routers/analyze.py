@@ -25,6 +25,7 @@ from app.services import mirofish
 from app.services import synthesizer
 from app.services import perplexica_client
 from app.services import metrics
+from app.services.result_store import save_result
 from app.services.aiops_ml import KNOWN_PROFILES
 from app.knowledge.pos import extract_signals_from_messages
 from app.services.baseline_store import WindowStat, save_window_stat
@@ -331,7 +332,7 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     metrics.analyze_requests_total.inc()
     metrics.record_analysis(req.tenant_id, host_analyses, overall_score, overall_status)
 
-    return AnalyzeResponse(
+    response = AnalyzeResponse(
         request_id=req.request_id,
         tenant_id=req.tenant_id,
         window={"from": window_from, "to": window_to},
@@ -346,3 +347,6 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             ollama_model=config.ollama.model,
         ),
     )
+
+    save_result(response.model_dump(mode="json"))
+    return response

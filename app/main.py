@@ -8,7 +8,9 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.config import config
 from app.routers import analyze, health, ingest
+from app.routers import config_router, results_router
 from app.services.baseline_store import init_db
+from app.services.result_store import init_result_table
 
 
 def _setup_logging() -> None:
@@ -20,6 +22,7 @@ def _setup_logging() -> None:
 async def lifespan(app: FastAPI):
     _setup_logging()
     init_db()
+    init_result_table()
     logging.getLogger(__name__).info(
         "log-analyzer starting — ollama=%s model=%s aiops_ml=%s enabled=%s",
         config.ollama.base_url,
@@ -42,6 +45,8 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(analyze.router)
 app.include_router(ingest.router)
+app.include_router(config_router.router)
+app.include_router(results_router.router)
 
 
 @app.get("/metrics", include_in_schema=False)

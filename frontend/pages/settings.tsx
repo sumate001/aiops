@@ -1,0 +1,232 @@
+import { useEffect, useState } from "react";
+import Link from "next/link";
+
+type ConfigData = {
+  godeye: { callback_url: string | null; enabled: boolean };
+  log_ml: { base_url: string; enabled: boolean };
+  perplexica: { base_url: string; enabled: boolean };
+  ollama: { base_url: string; model: string; timeout: string; temperature: number };
+  aiops_ml: { base_url: string; enabled: boolean };
+};
+
+export default function Settings() {
+  const [cfg, setCfg] = useState<ConfigData | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const [form, setForm] = useState({
+    godeye_callback_url: "",
+    godeye_enabled: true,
+    log_ml_enabled: true,
+    log_ml_base_url: "http://localhost:3050",
+    perplexica_enabled: false,
+    perplexica_base_url: "http://localhost:3001",
+    ollama_base_url: "http://localhost:11434",
+    ollama_model: "qwen2.5:14b",
+  });
+
+  useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((data: ConfigData) => {
+        setCfg(data);
+        setForm({
+          godeye_callback_url: data.godeye.callback_url ?? "",
+          godeye_enabled: data.godeye.enabled,
+          log_ml_enabled: data.log_ml.enabled,
+          log_ml_base_url: data.log_ml.base_url,
+          perplexica_enabled: data.perplexica.enabled,
+          perplexica_base_url: data.perplexica.base_url,
+          ollama_base_url: data.ollama.base_url,
+          ollama_model: data.ollama.model,
+        });
+      })
+      .catch(() => setMsg({ ok: false, text: "Failed to load config from backend" }));
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    setMsg(null);
+    try {
+      const r = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...form,
+          godeye_callback_url: form.godeye_callback_url || null,
+        }),
+      });
+      const data = await r.json();
+      if (r.ok) {
+        setMsg({ ok: true, text: data.message ?? "Saved" });
+      } else {
+        setMsg({ ok: false, text: data.detail ?? "Save failed" });
+      }
+    } catch (e) {
+      setMsg({ ok: false, text: String(e) });
+    }
+    setSaving(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-950 text-gray-100 p-6">
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Settings</h1>
+          <p className="text-gray-400 text-sm mt-1">Pipeline configuration</p>
+        </div>
+        <nav className="flex gap-4 text-sm">
+          <Link href="/" className="text-gray-400 hover:text-white">Dashboard</Link>
+          <Link href="/results" className="text-gray-400 hover:text-white">Results</Link>
+          <Link href="/settings" className="text-blue-400 font-medium">Settings</Link>
+        </nav>
+      </div>
+
+      <div className="max-w-2xl space-y-6">
+        {/* GodEye Callback */}
+        <Section title="GodEye Callback">
+          <Toggle
+            label="Enabled"
+            checked={form.godeye_enabled}
+            onChange={(v) => setForm({ ...form, godeye_enabled: v })}
+          />
+          <Field
+            label="Callback URL"
+            placeholder="http://your-godeye-host/callback"
+            value={form.godeye_callback_url}
+            onChange={(v) => setForm({ ...form, godeye_callback_url: v })}
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            After each /ingest analysis, results will be POSTed as JSON to this URL.
+          </p>
+        </Section>
+
+        {/* Isolation Forest */}
+        <Section title="A1 Isolation Forest (log-ml)">
+          <Toggle
+            label="Enabled"
+            checked={form.log_ml_enabled}
+            onChange={(v) => setForm({ ...form, log_ml_enabled: v })}
+          />
+          <Field
+            label="Base URL"
+            value={form.log_ml_base_url}
+            onChange={(v) => setForm({ ...form, log_ml_base_url: v })}
+          />
+        </Section>
+
+        {/* Perplexica */}
+        <Section title="A2 Perplexica (External Knowledge)">
+          <Toggle
+            label="Enabled"
+            checked={form.perplexica_enabled}
+            onChange={(v) => setForm({ ...form, perplexica_enabled: v })}
+          />
+          <Field
+            label="Base URL"
+            value={form.perplexica_base_url}
+            onChange={(v) => setForm({ ...form, perplexica_base_url: v })}
+          />
+        </Section>
+
+        {/* Ollama */}
+        <Section title="Ollama LLM">
+          <Field
+            label="Base URL"
+            value={form.ollama_base_url}
+            onChange={(v) => setForm({ ...form, ollama_base_url: v })}
+          />
+          <Field
+            label="Model"
+            value={form.ollama_model}
+            onChange={(v) => setForm({ ...form, ollama_model: v })}
+          />
+          {cfg && (
+            <p className="text-xs text-gray-500 mt-1">
+              Temperature: {cfg.ollama.temperature} · Timeout: {cfg.ollama.timeout}
+            </p>
+          )}
+        </Section>
+
+        {/* Read-only info */}
+        {cfg && (
+          <Section title="aiops-ml (read-only)">
+            <div className="text-xs text-gray-400 space-y-1">
+              <div>URL: {cfg.aiops_ml.base_url}</div>
+              <div>Enabled: {cfg.aiops_ml.enabled ? "yes" : "no"}</div>
+            </div>
+          </Section>
+        )}
+
+        {msg && (
+          <div className={`rounded-lg px-4 py-3 text-sm ${msg.ok ? "bg-green-900 text-green-300" : "bg-red-900 text-red-300"}`}>
+            {msg.text}
+          </div>
+        )}
+
+        <button
+          onClick={save}
+          disabled={saving}
+          className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium px-6 py-2.5 rounded-lg transition-colors"
+        >
+          {saving ? "Saving..." : "Save Settings"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="bg-gray-900 rounded-xl p-5">
+      <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">{title}</h3>
+      <div className="space-y-3">{children}</div>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <label className="block text-xs text-gray-400 mb-1">{label}</label>
+      <input
+        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
+    </div>
+  );
+}
+
+function Toggle({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <button
+        onClick={() => onChange(!checked)}
+        className={`relative w-10 h-5 rounded-full transition-colors ${checked ? "bg-blue-600" : "bg-gray-700"}`}
+      >
+        <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${checked ? "translate-x-5" : ""}`} />
+      </button>
+      <span className="text-sm text-gray-300">{label}</span>
+    </div>
+  );
+}
