@@ -4,19 +4,26 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from app.config import config, OLLAMA_TIMEOUT, AIOPS_ML_TIMEOUT, LOG_ML_TIMEOUT
+from app.config import config, OLLAMA_TIMEOUT, AIOPS_ML_TIMEOUT, LOG_ML_TIMEOUT, PERPLEXICA_TIMEOUT
 from app.models.request import AnalyzeRequest, LogEntry
 from app.models.response import (
     AnalyzeResponse,
     AnomalyScore,
     Explanation,
     HostAnalysis,
+    MiroFishFrame,
+    PerplexicaEnrichment,
+    PerplexicaSource,
     Sources,
+    Synthesis,
     TopError,
 )
 from app.services import aiops_ml as ml_client
 from app.services import ollama as ollama_client
 from app.services import log_ml_client
+from app.services import mirofish
+from app.services import synthesizer
+from app.services import perplexica_client
 from app.services.aiops_ml import KNOWN_PROFILES
 from app.knowledge.pos import extract_signals_from_messages
 from app.services.baseline_store import WindowStat, save_window_stat
@@ -169,6 +176,56 @@ async def _analyze_host(
             anomaly_scores = [a.score for a in anomalies]
             health_score = compute_host_health_score(error_count, warn_count, len(entries), anomaly_scores)
 
+    # ── A3 MiroFish — 5-frame parallel analysis ──
+    mirofish_frames = await mirofish.analyze(
+        host=hostname,
+        health_score=health_score,
+        signal_counts=sig,
+        top_error_msgs=top_error_msgs,
+        use_llm=False,    # LLM enrichment handled by AA Synthesizer
+    )
+    mirofish_results = [MiroFishFrame(**f) for f in mirofish_frames]
+
+    # ── AA Synthesizer — LLM-as-Judge ──
+    synth_result = await synthesizer.synthesize(
+        host=hostname,
+        health_score=health_score,
+        anomalies=[a.model_dump() for a in anomalies],
+        mirofish_frames=mirofish_frames,
+        use_llm=False,
+    )
+    synthesis = Synthesis(
+        root_cause_chain=synth_result.root_cause_chain,
+        confidence=synth_result.confidence,
+        fix_steps=synth_result.fix_steps,
+        method=synth_result.method,
+        top_frame=synth_result.top_frame,
+        top_frame_lens=synth_result.top_frame_lens,
+        anomaly_methods=synth_result.anomaly_methods,
+    )
+
+    # ── A2 Perplexica — external knowledge enrichment ──
+    enrichment: PerplexicaEnrichment | None = None
+    if config.perplexica.enabled and (anomalies or any(f["relevance"] > 0 for f in mirofish_frames)):
+        top_kws = mirofish_frames[0]["top_keywords"] if mirofish_frames else []
+        query = perplexica_client.build_query(
+            top_frame=synth_result.top_frame,
+            top_keywords=top_kws,
+            top_error_msgs=top_error_msgs,
+            host=hostname,
+        )
+        perp_result = await perplexica_client.search(
+            query=query,
+            base_url=config.perplexica.base_url,
+            timeout=PERPLEXICA_TIMEOUT,
+        )
+        if perp_result:
+            enrichment = PerplexicaEnrichment(
+                query=perp_result["query"],
+                answer=perp_result["answer"],
+                sources=[PerplexicaSource(**s) for s in perp_result["sources"]],
+            )
+
     # ── Trend analysis + prediction ──
     trend = analyze_trend(hostname)
     prediction = generate_prediction(
@@ -195,6 +252,9 @@ async def _analyze_host(
         explanation=explanation,
         trend=trend,
         prediction=prediction,
+        mirofish=mirofish_results,
+        synthesis=synthesis,
+        enrichment=enrichment,
     ), ollama_used
 
 

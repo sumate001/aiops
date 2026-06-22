@@ -29,6 +29,37 @@ class AnomalyScore(BaseModel):
     predicted_breach_at: datetime | None = None
 
 
+class MiroFishFrame(BaseModel):
+    frame: str
+    lens: str
+    relevance: float
+    signal_hits: int
+    keyword_hits: int
+    top_keywords: list[str] = []
+    insight: str | None = None
+
+
+class PerplexicaSource(BaseModel):
+    title: str
+    url: str
+
+
+class PerplexicaEnrichment(BaseModel):
+    query: str
+    answer: str
+    sources: list[PerplexicaSource] = []
+
+
+class Synthesis(BaseModel):
+    root_cause_chain: list[str]
+    confidence: float
+    fix_steps: list[str]
+    method: str
+    top_frame: str | None = None
+    top_frame_lens: str | None = None
+    anomaly_methods: list[str] = []
+
+
 class TopError(BaseModel):
     msg: str
     count: int
@@ -57,6 +88,9 @@ class HostAnalysis(BaseModel):
     explanation: Explanation | None = None
     trend: TrendInfo | None = None
     prediction: PredictionInfo | None = None
+    mirofish: list[MiroFishFrame] = []
+    synthesis: Synthesis | None = None
+    enrichment: PerplexicaEnrichment | None = None
 
 
 class Sources(BaseModel):

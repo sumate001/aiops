@@ -24,6 +24,18 @@ class LogMlConfig(BaseModel):
     enabled: bool = True
 
 
+class PerplexicaConfig(BaseModel):
+    base_url: str = "http://localhost:3001"
+    timeout: str = "30s"
+    enabled: bool = False
+
+
+class PerplexicaConfig(BaseModel):
+    base_url: str = "http://localhost:3001"
+    timeout: str = "30s"
+    enabled: bool = False
+
+
 class OllamaConfig(BaseModel):
     base_url: str = "http://localhost:11434"
     model: str = "qwen2.5:14b"
@@ -49,6 +61,7 @@ class AppConfig(BaseModel):
     logger: LoggerConfig = LoggerConfig()
     aiops_ml: AiopsMlConfig = AiopsMlConfig()
     log_ml: LogMlConfig = LogMlConfig()
+    perplexica: PerplexicaConfig = PerplexicaConfig()
     ollama: OllamaConfig = OllamaConfig()
     analysis: AnalysisConfig = AnalysisConfig()
 
@@ -77,6 +90,7 @@ config = load_config()
 OLLAMA_TIMEOUT = _parse_timeout(config.ollama.timeout)
 AIOPS_ML_TIMEOUT = _parse_timeout(config.aiops_ml.timeout)
 LOG_ML_TIMEOUT = _parse_timeout(config.log_ml.timeout)
+PERPLEXICA_TIMEOUT = _parse_timeout(config.perplexica.timeout)
 
 SEVERITY_THRESHOLD: dict[str, int] = {
     "trace": 1,

@@ -9,6 +9,16 @@ aiops_ml:
   timeout: "60s"
   enabled: true    # false = skip ML, วิเคราะห์ด้วย Ollama อย่างเดียว
 
+log_ml:
+  base_url: "http://localhost:3050"   # A1 Isolation Forest service
+  timeout: "10s"
+  enabled: true
+
+perplexica:
+  base_url: "http://localhost:3001"   # A2 Perplexica (SearXNG + AI synthesis)
+  timeout: "30s"
+  enabled: false   # true = enrich analysis with external search results
+
 ollama:
   base_url: "http://localhost:11434"
   model: "qwen2.5:14b"       # ปรับตาม model ที่ deploy ไว้
