@@ -4,6 +4,11 @@ http:
 logger:
   level: "info"   # debug | info | warning | error
 
+godeye:
+  callback_url: null        # POST AnalyzeResponse กลับหา GodEye เช่น "http://godeye:9000/api/aiops/callback"
+  callback_timeout: "10s"
+  enabled: true             # false = ไม่ส่ง webhook แม้จะมี callback_url
+
 aiops_ml:
   base_url: "http://aiops-ml:8100"
   timeout: "60s"

@@ -24,6 +24,12 @@ class LogMlConfig(BaseModel):
     enabled: bool = True
 
 
+class GodEyeConfig(BaseModel):
+    callback_url: str | None = None   # POST AnalyzeResponse กลับหา GodEye หลัง /ingest
+    callback_timeout: str = "10s"
+    enabled: bool = True
+
+
 class PerplexicaConfig(BaseModel):
     base_url: str = "http://localhost:3001"
     timeout: str = "30s"
@@ -61,6 +67,7 @@ class AppConfig(BaseModel):
     logger: LoggerConfig = LoggerConfig()
     aiops_ml: AiopsMlConfig = AiopsMlConfig()
     log_ml: LogMlConfig = LogMlConfig()
+    godeye: GodEyeConfig = GodEyeConfig()
     perplexica: PerplexicaConfig = PerplexicaConfig()
     ollama: OllamaConfig = OllamaConfig()
     analysis: AnalysisConfig = AnalysisConfig()

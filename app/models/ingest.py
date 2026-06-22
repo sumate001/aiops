@@ -42,4 +42,7 @@ class GodEyesIngestRequest(BaseModel):
     window_from: str | None = Field(None, alias="window_from")
     window_to: str | None = Field(None, alias="window_to")
 
+    # optional: POST AnalyzeResponse back to this URL after analysis
+    callback_url: str | None = None
+
     entries: list[dict[str, Any]] = Field(min_length=1)

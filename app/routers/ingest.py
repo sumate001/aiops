@@ -6,17 +6,19 @@ POST /ingest — รับ GodEyes native log format แล้วแปลงก
   2. JSONL body (Content-Type: application/x-ndjson): หนึ่ง JSON object ต่อบรรทัด
 """
 
+import asyncio
 import json
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
 
+from app.config import config
 from app.models.ingest import GodEyesIngestRequest
 from app.models.request import AnalyzeRequest
 from app.models.response import AnalyzeResponse
 from app.routers.analyze import analyze
 from app.services.godeyes_adapter import build_analyze_request
+from app.services import webhook
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -62,6 +64,10 @@ async def ingest(request: Request) -> AnalyzeResponse:
         tenant_id = payload.tenant_id or "internal"
         window_from = payload.window_from
         window_to = payload.window_to
+        callback_url = payload.callback_url or config.godeye.callback_url
+
+    if "ndjson" in content_type or "x-ndjson" in content_type:
+        callback_url = config.godeye.callback_url
 
     if not raw_entries:
         raise HTTPException(status_code=400, detail={"error": "no entries provided"})
@@ -84,4 +90,10 @@ async def ingest(request: Request) -> AnalyzeResponse:
         tenant_id,
     )
 
-    return await _run_analyze(analyze_dict)
+    result = await _run_analyze(analyze_dict)
+
+    # ── Webhook callback → GodEye (fire-and-forget) ──
+    if callback_url and config.godeye.enabled:
+        asyncio.create_task(webhook.send(callback_url, result.model_dump(mode="json")))
+
+    return result
