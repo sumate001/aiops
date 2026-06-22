@@ -1,0 +1,67 @@
+services:
+  # ── A1 — Log Analyzer ──────────────────────────────────────────────
+  log-analyzer:
+    build: ./log-analyzer
+    ports:
+      - "8200:8200"
+    volumes:
+      - log-analyzer-db:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - log-ml
+      - perplexica
+    restart: unless-stopped
+
+  # ── A1 — Isolation Forest ML ────────────────────────────────────────
+  log-ml:
+    build: ./log-ml
+    ports:
+      - "3050:3050"
+    volumes:
+      - log-ml-models:/app/model_store
+    environment:
+      - ML_MODEL_STORE=/app/model_store
+      - ML_MIN_WINDOWS=30
+      - ML_CONTAMINATION=0.05
+    restart: unless-stopped
+
+  # ── A2 — SearXNG (search backend for Perplexica) ───────────────────
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    ports:
+      - "4000:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    restart: unless-stopped
+
+  # ── A2 — Perplexica (AI search + synthesis) ────────────────────────
+  perplexica-backend:
+    image: itzcrazykns1337/perplexica-backend:latest
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./perplexica/config.toml:/home/perplexica/config.toml:ro
+    depends_on:
+      - searxng
+    restart: unless-stopped
+
+  perplexica-frontend:
+    image: itzcrazykns1337/perplexica-frontend:latest
+    ports:
+      - "3002:3000"
+    depends_on:
+      - perplexica-backend
+    restart: unless-stopped
+
+volumes:
+  log-analyzer-db:
+  log-ml-models:
