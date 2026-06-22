@@ -10,7 +10,7 @@ services:
       - PYTHONUNBUFFERED=1
     depends_on:
       - log-ml
-      - perplexica
+      - perplexica-backend
     restart: unless-stopped
 
   # ── A1 — Isolation Forest ML ────────────────────────────────────────
@@ -43,7 +43,7 @@ services:
       - SETUID
     restart: unless-stopped
 
-  # ── A2 — Perplexica (AI search + synthesis) ────────────────────────
+  # ── A2 — Perplexica ────────────────────────────────────────────────
   perplexica-backend:
     image: itzcrazykns1337/perplexica-backend:latest
     ports:
@@ -62,6 +62,37 @@ services:
       - perplexica-backend
     restart: unless-stopped
 
+  # ── Observability — Prometheus ──────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+    restart: unless-stopped
+
+  # ── Observability — Grafana ──────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3003:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=godeyes
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
 volumes:
   log-analyzer-db:
   log-ml-models:
+  prometheus-data:
+  grafana-data:

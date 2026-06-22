@@ -1,0 +1,148 @@
+{
+  "title": "GodEyes AIOps",
+  "uid": "godeyes-aiops",
+  "version": 1,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Overall Health Score",
+      "type": "gauge",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 6 },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0, "max": 100,
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "red" },
+              { "value": 50, "color": "yellow" },
+              { "value": 80, "color": "green" }
+            ]
+          },
+          "unit": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "godeyes_overall_health_score",
+          "legendFormat": "{{tenant_id}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Host Health Score",
+      "type": "timeseries",
+      "gridPos": { "x": 6, "y": 0, "w": 18, "h": 6 },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0, "max": 100,
+          "unit": "none",
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "red" },
+              { "value": 50, "color": "yellow" },
+              { "value": 80, "color": "green" }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "godeyes_host_health_score",
+          "legendFormat": "{{host}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Host Status",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "OK", "color": "green" }, "2": { "text": "WARNING", "color": "yellow" }, "3": { "text": "CRITICAL", "color": "red" } } }
+          ]
+        }
+      },
+      "targets": [
+        {
+          "expr": "godeyes_host_status",
+          "legendFormat": "{{host}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Error Count per Host",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 4 },
+      "targets": [
+        {
+          "expr": "godeyes_host_error_count",
+          "legendFormat": "{{host}} errors"
+        },
+        {
+          "expr": "godeyes_host_warn_count",
+          "legendFormat": "{{host}} warns"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "MiroFish Frame Relevance",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 10, "w": 12, "h": 6 },
+      "fieldConfig": {
+        "defaults": { "min": 0, "max": 1, "unit": "percentunit" }
+      },
+      "targets": [
+        {
+          "expr": "godeyes_mirofish_frame_relevance",
+          "legendFormat": "{{host}} / {{frame}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "AA Synthesis Confidence",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 10, "w": 12, "h": 6 },
+      "fieldConfig": {
+        "defaults": { "min": 0, "max": 1, "unit": "percentunit" }
+      },
+      "targets": [
+        {
+          "expr": "godeyes_synthesis_confidence",
+          "legendFormat": "{{host}} ({{top_frame}})"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Anomaly Count per Host",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 5 },
+      "targets": [
+        {
+          "expr": "godeyes_host_anomaly_count",
+          "legendFormat": "{{host}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Analyze Requests / min",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 5 },
+      "targets": [
+        {
+          "expr": "rate(godeyes_analyze_requests_total[1m]) * 60",
+          "legendFormat": "requests/min"
+        }
+      ]
+    }
+  ]
+}
