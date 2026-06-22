@@ -14,6 +14,10 @@ const nextConfig = {
         source: "/perplexica/:path*",
         destination: "http://localhost:3001/:path*",
       },
+      {
+        source: "/ollama-proxy/:path*",
+        destination: "http://100.94.37.18:11434/:path*",
+      },
     ];
   },
 };

@@ -25,6 +25,17 @@ export default function Settings() {
     ollama_model: "qwen2.5:14b",
   });
 
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+
+  const fetchOllamaModels = async (baseUrl: string) => {
+    try {
+      const r = await fetch(`/ollama-proxy/api/tags`);
+      const d = await r.json();
+      const models = (d.models ?? []).map((m: any) => m.name as string);
+      setOllamaModels(models);
+    } catch {}
+  };
+
   const [perplexicaCfg, setPerplexicaCfg] = useState({
     ollama_url: "http://host.docker.internal:11434",
     chat_model: "",
@@ -36,12 +47,22 @@ export default function Settings() {
 
   const fetchPerplexicaConfig = async (_baseUrl: string) => {
     try {
-      const r = await fetch(`/perplexica/api/config`);
-      const d = await r.json();
-      const ollama = d.values?.modelProviders?.find((p: any) => p.id === "ollama");
+      // ดึง Ollama URL จาก /api/config
+      const cfgR = await fetch(`/perplexica/api/config`);
+      const cfg = await cfgR.json();
+      const ollamaCfg = cfg.values?.modelProviders?.find((p: any) => p.type === "ollama" || p.id === "ollama");
+      if (ollamaCfg?.config?.baseURL) {
+        setPerplexicaCfg((prev) => ({ ...prev, ollama_url: ollamaCfg.config.baseURL }));
+      }
+
+      // ดึง models จาก /api/providers (มี chatModels จริง)
+      const provR = await fetch(`/perplexica/api/providers`);
+      const prov = await provR.json();
+      const ollama = prov.providers?.find((p: any) => p.type === "ollama");
       if (ollama) {
-        setPerplexicaCfg((prev) => ({ ...prev, ollama_url: ollama.config?.baseURL ?? prev.ollama_url }));
-        const models = ollama.chatModels?.map((m: any) => m.key) ?? [];
+        const models = ollama.chatModels
+          ?.filter((m: any) => m.key !== "error")
+          .map((m: any) => m.key) ?? [];
         setPerplexicaModels(models);
         if (models.length > 0) setPerplexicaCfg((prev) => ({ ...prev, chat_model: prev.chat_model || models[0] }));
       }
@@ -81,6 +102,7 @@ export default function Settings() {
           ollama_model: data.ollama.model,
         });
         fetchPerplexicaConfig(data.perplexica.base_url).catch(() => {});
+        fetchOllamaModels(data.ollama.base_url).catch(() => {});
       })
       .catch(() => setMsg({ ok: false, text: "Failed to load config from backend" }));
   }, []);
@@ -175,36 +197,31 @@ export default function Settings() {
           {/* Perplexica Ollama Model Config */}
           <div className="mt-4 border-t border-gray-700 pt-4 space-y-3">
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Perplexica → Ollama Model</p>
-            <div className="bg-blue-950 border border-blue-800 rounded-lg px-3 py-2 text-xs text-blue-300 space-y-1">
-              <p><strong>Perplexica รันใน Docker</strong> — ต้องใช้ <code className="bg-blue-900 px-1 rounded">host.docker.internal:11434</code></p>
-              <p className="text-blue-400">
-                ถ้า Ollama อยู่บน Tailscale/remote: รัน proxy ก่อน
-              </p>
-              <code className="block bg-blue-900 px-2 py-1 rounded text-blue-200">
-                python3 ollama-proxy.py
-              </code>
-              <p className="text-blue-500">ถ้า Ollama อยู่บน host เดียวกัน: ใช้ได้เลยโดยไม่ต้องรัน proxy</p>
-            </div>
             <Field
-              label="Ollama Base URL (จาก container → host)"
-              placeholder="http://host.docker.internal:11434"
+              label="Ollama Base URL"
+              placeholder="http://localhost:11434"
               value={perplexicaCfg.ollama_url}
               onChange={(v) => setPerplexicaCfg({ ...perplexicaCfg, ollama_url: v })}
             />
-            {perplexicaModels.length > 0 ? (
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Chat Model</label>
-                <select
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
-                  value={perplexicaCfg.chat_model}
-                  onChange={(e) => setPerplexicaCfg({ ...perplexicaCfg, chat_model: e.target.value })}
-                >
-                  {perplexicaModels.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </div>
-            ) : (
-              <p className="text-xs text-gray-500">No models loaded — save Ollama URL then click Refresh</p>
-            )}
+            {(() => {
+              const models = perplexicaModels.length > 0 ? perplexicaModels : ollamaModels;
+              return models.length > 0 ? (
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">
+                    Chat Model {perplexicaModels.length === 0 && <span className="text-yellow-500">(from Ollama direct)</span>}
+                  </label>
+                  <select
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+                    value={perplexicaCfg.chat_model}
+                    onChange={(e) => setPerplexicaCfg({ ...perplexicaCfg, chat_model: e.target.value })}
+                  >
+                    {models.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </div>
+              ) : (
+                <p className="text-xs text-gray-500">No models loaded — save Ollama URL then click Refresh</p>
+              );
+            })()}
             {perplexicaMsg && (
               <div className={`rounded-lg px-3 py-2 text-xs ${perplexicaMsg.ok ? "bg-green-900 text-green-300" : "bg-red-900 text-red-300"}`}>
                 {perplexicaMsg.text}
@@ -229,21 +246,32 @@ export default function Settings() {
         </Section>
 
         {/* Ollama — log-analyzer (native process) */}
-        <Section title="Ollama LLM (log-analyzer)">
-          <div className="bg-yellow-950 border border-yellow-800 rounded-lg px-3 py-2 text-xs text-yellow-300 mb-2">
-            log-analyzer รันบน host โดยตรง — ใช้ IP จริงได้เลย (localhost / LAN / Tailscale)
-          </div>
+        <Section title="Ollama LLM">
           <Field
             label="Base URL"
-            placeholder="http://localhost:11434 หรือ http://100.x.x.x:11434"
+            placeholder="http://localhost:11434"
             value={form.ollama_base_url}
             onChange={(v) => setForm({ ...form, ollama_base_url: v })}
           />
-          <Field
-            label="Model"
-            value={form.ollama_model}
-            onChange={(v) => setForm({ ...form, ollama_model: v })}
-          />
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Model</label>
+            {ollamaModels.length > 0 ? (
+              <select
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+                value={form.ollama_model}
+                onChange={(e) => setForm({ ...form, ollama_model: e.target.value })}
+              >
+                {ollamaModels.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            ) : (
+              <input
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+                value={form.ollama_model}
+                onChange={(e) => setForm({ ...form, ollama_model: e.target.value })}
+                placeholder="e.g. gemma4:12b"
+              />
+            )}
+          </div>
           {cfg && (
             <p className="text-xs text-gray-500 mt-1">
               Temperature: {cfg.ollama.temperature} · Timeout: {cfg.ollama.timeout}

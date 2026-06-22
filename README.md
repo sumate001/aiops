@@ -60,7 +60,9 @@ app/
 │   └── response.py              # HostAnalysis, MiroFishFrame, Synthesis, etc.
 ├── routers/
 │   ├── analyze.py               # POST /analyze — full MoA pipeline
-│   └── ingest.py                # POST /ingest — log ingestion from LogSim
+│   ├── ingest.py                # POST /ingest — log ingestion from LogSim
+│   ├── config_router.py         # GET/POST /api/config — runtime config management
+│   └── results_router.py        # GET /api/results, GET /api/status
 └── services/
     ├── baseline_store.py        # SQLite window_stats persistence
     ├── log_ml_client.py         # HTTP client → log-ml :3050
@@ -70,7 +72,15 @@ app/
     ├── ollama.py                # Ollama LLM client
     ├── perplexica_client.py     # A2 — Perplexica search + enrichment
     ├── predictor.py             # Trend analysis + prediction
+    ├── result_store.py          # SQLite result store (max 500, auto-pruned)
     └── synthesizer.py           # AA — LLM-as-Judge synthesis
+
+frontend/                        # Next.js UI :3100
+├── pages/
+│   ├── index.tsx                # Dashboard — pipeline status + recent results
+│   ├── results.tsx              # Results viewer (MiroFish frames, AA synthesis)
+│   └── settings.tsx             # Settings — config all agents + model dropdowns
+└── next.config.mjs              # Proxy rewrites → backend :8200, Ollama, Perplexica
 ```
 
 ### log-ml branch
@@ -93,29 +103,34 @@ app/
 ### Local Development
 
 ```bash
-# 1. log-analyzer
+# 1. log-analyzer backend
 cd log-analyzer
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp config.yaml.example config.yaml
-uvicorn app.main:app --port 8200    # http://localhost:8200
+cp config.yaml.example config.yaml   # แก้ค่า ollama.base_url, callback_url ฯลฯ
+uvicorn app.main:app --port 8200     # http://localhost:8200
 
-# 2. log-ml
+# 2. log-analyzer frontend (UI)
+cd log-analyzer/frontend
+npm install
+node node_modules/.bin/next dev --webpack -p 3100   # http://localhost:3100
+
+# 3. log-ml (Isolation Forest)
 cd log-ml
-python3.11 -m venv .venv
-source .venv/bin/activate
+python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --port 3050    # http://localhost:3050
 
-# 3. Prometheus (brew)
-brew install prometheus
-prometheus --config.file=prometheus/prometheus.yml --web.listen-address=":9090"
+# 4. Perplexica (native — ต้องการ Node.js 22+)
+cd perplexica-src
+DATA_DIR=. node node_modules/.bin/next start -p 3001
 
-# 4. Grafana (brew)
-brew install grafana && brew services start grafana
+# 5. Prometheus + Grafana (brew)
+brew install prometheus grafana && brew services start grafana
+prometheus --config.file=prometheus/prometheus.yml --web.listen-address=":9090"
 # Import grafana/provisioning/dashboards/godeyes.json
-# http://localhost:3000 (admin/admin)
+# http://localhost:3003 (admin/godeyes)
 ```
 
 ### Docker Compose (Full Stack)
@@ -256,7 +271,23 @@ curl -X POST http://localhost:8200/analyze \
 
 ### POST /ingest
 
-รับ log entries จาก LogSim (GodEyes JSONL format)
+รับ log entries จาก LogSim (GodEyes JSONL format) แล้วรัน full MoA pipeline และ POST ผลไปที่ `callback_url` ที่ตั้งไว้ใน Settings
+
+### GET /api/config / POST /api/config
+
+ดู/แก้ไข config ทั้งหมดแบบ runtime (ไม่ต้อง restart)
+
+### GET /api/results
+
+ดูผลการวิเคราะห์ที่เก็บไว้ใน SQLite (max 500 รายการ auto-pruned)
+
+```bash
+curl http://localhost:8200/api/results?limit=20&tenant_id=store-001
+```
+
+### GET /api/status
+
+ตรวจสอบสถานะ agent ทั้งหมด (log-ml, perplexica, ollama)
 
 ### GET /metrics
 
