@@ -24,6 +24,7 @@ from app.services import log_ml_client
 from app.services import mirofish
 from app.services import synthesizer
 from app.services import perplexica_client
+from app.services import metrics
 from app.services.aiops_ml import KNOWN_PROFILES
 from app.knowledge.pos import extract_signals_from_messages
 from app.services.baseline_store import WindowStat, save_window_stat
@@ -325,6 +326,10 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
 
     # Step 7: assemble response
     summary = build_summary(host_analyses)
+
+    # ── Prometheus metrics ──
+    metrics.analyze_requests_total.inc()
+    metrics.record_analysis(req.tenant_id, host_analyses, overall_score, overall_status)
 
     return AnalyzeResponse(
         request_id=req.request_id,

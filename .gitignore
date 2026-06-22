@@ -15,5 +15,13 @@ venv/
 dist/
 build/
 
+# ML models
+model_store/
+*.joblib
+*.meta.json
+
+# Env
+.env
+
 # OS
 .DS_Store

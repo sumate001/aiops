@@ -3,8 +3,8 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.config import config
 from app.routers import analyze, health, ingest
@@ -32,17 +32,32 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="log-analyzer", version="1.0.0", lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(health.router)
 app.include_router(analyze.router)
 app.include_router(ingest.router)
 
+
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics():
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 _static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(_static_dir):
+    from fastapi.staticfiles import StaticFiles
     app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
-@app.get("/")
-async def dashboard():
-    return FileResponse(os.path.join(_static_dir, "index.html"))
+    @app.get("/")
+    async def dashboard():
+        return FileResponse(os.path.join(_static_dir, "index.html"))
 
 
 @app.exception_handler(Exception)
