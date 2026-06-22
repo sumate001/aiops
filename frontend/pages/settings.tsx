@@ -25,6 +25,46 @@ export default function Settings() {
     ollama_model: "qwen2.5:14b",
   });
 
+  const [perplexicaCfg, setPerplexicaCfg] = useState({
+    ollama_url: "http://host.docker.internal:11434",
+    chat_model: "",
+    embedding_model: "",
+  });
+  const [perplexicaModels, setPerplexicaModels] = useState<string[]>([]);
+  const [perplexicaSaving, setPerplexicaSaving] = useState(false);
+  const [perplexicaMsg, setPerplexicaMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const fetchPerplexicaConfig = async (_baseUrl: string) => {
+    try {
+      const r = await fetch(`/perplexica/api/config`);
+      const d = await r.json();
+      const ollama = d.values?.modelProviders?.find((p: any) => p.id === "ollama");
+      if (ollama) {
+        setPerplexicaCfg((prev) => ({ ...prev, ollama_url: ollama.config?.baseURL ?? prev.ollama_url }));
+        const models = ollama.chatModels?.map((m: any) => m.key) ?? [];
+        setPerplexicaModels(models);
+        if (models.length > 0) setPerplexicaCfg((prev) => ({ ...prev, chat_model: prev.chat_model || models[0] }));
+      }
+    } catch {}
+  };
+
+  const savePerplexicaConfig = async () => {
+    setPerplexicaSaving(true);
+    setPerplexicaMsg(null);
+    try {
+      await fetch(`/perplexica/api/providers/ollama`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config: { baseURL: perplexicaCfg.ollama_url } }),
+      });
+      await fetchPerplexicaConfig(form.perplexica_base_url);
+      setPerplexicaMsg({ ok: true, text: "Perplexica Ollama URL updated. Models refreshed." });
+    } catch (e) {
+      setPerplexicaMsg({ ok: false, text: "Failed to update Perplexica — is it running at port 3001?" });
+    }
+    setPerplexicaSaving(false);
+  };
+
   useEffect(() => {
     fetch("/api/config")
       .then((r) => r.json())
@@ -40,6 +80,7 @@ export default function Settings() {
           ollama_base_url: data.ollama.base_url,
           ollama_model: data.ollama.model,
         });
+        fetchPerplexicaConfig(data.perplexica.base_url).catch(() => {});
       })
       .catch(() => setMsg({ ok: false, text: "Failed to load config from backend" }));
   }, []);
@@ -123,16 +164,78 @@ export default function Settings() {
             onChange={(v) => setForm({ ...form, perplexica_enabled: v })}
           />
           <Field
-            label="Base URL"
+            label="Perplexica Base URL"
             value={form.perplexica_base_url}
             onChange={(v) => setForm({ ...form, perplexica_base_url: v })}
           />
+          <p className="text-xs text-gray-500">
+            Perplexica UI: <a href={form.perplexica_base_url} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">{form.perplexica_base_url}</a>
+          </p>
+
+          {/* Perplexica Ollama Model Config */}
+          <div className="mt-4 border-t border-gray-700 pt-4 space-y-3">
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Perplexica → Ollama Model</p>
+            <div className="bg-blue-950 border border-blue-800 rounded-lg px-3 py-2 text-xs text-blue-300 space-y-1">
+              <p><strong>Perplexica รันใน Docker</strong> — ต้องใช้ <code className="bg-blue-900 px-1 rounded">host.docker.internal:11434</code></p>
+              <p className="text-blue-400">
+                ถ้า Ollama อยู่บน Tailscale/remote: รัน proxy ก่อน
+              </p>
+              <code className="block bg-blue-900 px-2 py-1 rounded text-blue-200">
+                python3 ollama-proxy.py
+              </code>
+              <p className="text-blue-500">ถ้า Ollama อยู่บน host เดียวกัน: ใช้ได้เลยโดยไม่ต้องรัน proxy</p>
+            </div>
+            <Field
+              label="Ollama Base URL (จาก container → host)"
+              placeholder="http://host.docker.internal:11434"
+              value={perplexicaCfg.ollama_url}
+              onChange={(v) => setPerplexicaCfg({ ...perplexicaCfg, ollama_url: v })}
+            />
+            {perplexicaModels.length > 0 ? (
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Chat Model</label>
+                <select
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+                  value={perplexicaCfg.chat_model}
+                  onChange={(e) => setPerplexicaCfg({ ...perplexicaCfg, chat_model: e.target.value })}
+                >
+                  {perplexicaModels.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+            ) : (
+              <p className="text-xs text-gray-500">No models loaded — save Ollama URL then click Refresh</p>
+            )}
+            {perplexicaMsg && (
+              <div className={`rounded-lg px-3 py-2 text-xs ${perplexicaMsg.ok ? "bg-green-900 text-green-300" : "bg-red-900 text-red-300"}`}>
+                {perplexicaMsg.text}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={savePerplexicaConfig}
+                disabled={perplexicaSaving}
+                className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium px-4 py-1.5 rounded-lg transition-colors"
+              >
+                {perplexicaSaving ? "Saving..." : "Save & Refresh Models"}
+              </button>
+              <button
+                onClick={() => fetchPerplexicaConfig(form.perplexica_base_url).catch(() => {})}
+                className="bg-gray-700 hover:bg-gray-600 text-white text-xs font-medium px-4 py-1.5 rounded-lg transition-colors"
+              >
+                Refresh Models
+              </button>
+            </div>
+          </div>
         </Section>
 
-        {/* Ollama */}
-        <Section title="Ollama LLM">
+        {/* Ollama — log-analyzer (native process) */}
+        <Section title="Ollama LLM (log-analyzer)">
+          <div className="bg-yellow-950 border border-yellow-800 rounded-lg px-3 py-2 text-xs text-yellow-300 mb-2">
+            log-analyzer รันบน host โดยตรง — ใช้ IP จริงได้เลย (localhost / LAN / Tailscale)
+          </div>
           <Field
             label="Base URL"
+            placeholder="http://localhost:11434 หรือ http://100.x.x.x:11434"
             value={form.ollama_base_url}
             onChange={(v) => setForm({ ...form, ollama_base_url: v })}
           />

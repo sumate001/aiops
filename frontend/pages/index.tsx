@@ -75,7 +75,7 @@ export default function Dashboard() {
         <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-5">MoA Pipeline</h2>
         <div className="flex items-center gap-2 flex-wrap">
           {AGENTS.map((agent, i) => {
-            const st = pipeStatus?.agents[agent.key];
+            const st = pipeStatus?.agents?.[agent.key];
             const color = STATUS_COLOR[st?.status ?? "down"] ?? "bg-gray-600";
             return (
               <div key={agent.key} className="flex items-center gap-2">

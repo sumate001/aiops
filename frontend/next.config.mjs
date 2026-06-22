@@ -10,6 +10,10 @@ const nextConfig = {
         source: "/healthz",
         destination: "http://localhost:8200/healthz",
       },
+      {
+        source: "/perplexica/:path*",
+        destination: "http://localhost:3001/:path*",
+      },
     ];
   },
 };
