@@ -10,7 +10,7 @@ services:
       - PYTHONUNBUFFERED=1
     depends_on:
       - log-ml
-      - perplexica-backend
+      - perplexica
     restart: unless-stopped
 
   # ── A1 — Isolation Forest ML ────────────────────────────────────────
@@ -26,7 +26,7 @@ services:
       - ML_CONTAMINATION=0.05
     restart: unless-stopped
 
-  # ── A2 — SearXNG (search backend for Perplexica) ───────────────────
+  # ── A2 — SearXNG (search engine for Perplexica) ───────────────────
   searxng:
     image: docker.io/searxng/searxng:latest
     ports:
@@ -43,23 +43,19 @@ services:
       - SETUID
     restart: unless-stopped
 
-  # ── A2 — Perplexica ────────────────────────────────────────────────
-  perplexica-backend:
-    image: itzcrazykns1337/perplexica-backend:latest
+  # ── A2 — Perplexica (Vane) ────────────────────────────────────────
+  # Ollama URL ใน container ต้องเป็น host.docker.internal:11434
+  # (ไม่ใช่ Tailscale IP โดยตรง — ต้องผ่าน host เป็น bridge)
+  perplexica:
+    image: itzcrazykns1337/vane:latest
     ports:
-      - "3001:3001"
+      - "3001:3000"
     volumes:
-      - ./perplexica/config.toml:/home/perplexica/config.toml:ro
+      - perplexica-data:/home/vane/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - searxng
-    restart: unless-stopped
-
-  perplexica-frontend:
-    image: itzcrazykns1337/perplexica-frontend:latest
-    ports:
-      - "3002:3000"
-    depends_on:
-      - perplexica-backend
     restart: unless-stopped
 
   # ── Observability — Prometheus ──────────────────────────────────────
@@ -94,5 +90,6 @@ services:
 volumes:
   log-analyzer-db:
   log-ml-models:
+  perplexica-data:
   prometheus-data:
   grafana-data:
