@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
+from dataclasses import dataclass, field
 
 from fastapi import APIRouter, HTTPException
 
@@ -44,266 +45,271 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-async def _analyze_host(
-    hostname: str,
-    entries: list[LogEntry],
-    window_from: str,
-    window_to: str,
-    predict_result: dict | None,
-) -> HostAnalysis:
-    service_profile = next((e.service_profile for e in entries if e.service_profile), None)
-    criticality = next((e.criticality for e in entries if e.criticality), None)
+# ── Intermediate state between phases ──────────────────────────────────────
+@dataclass
+class _HostState:
+    hostname: str
+    entries: list[LogEntry]
+    window_from: str
+    window_to: str
+    predict_result: dict | None
 
-    error_count = sum(1 for e in entries if e.severity_number >= 17)
-    warn_count = sum(1 for e in entries if 13 <= e.severity_number <= 16)
-    top_errors = compute_top_errors(entries)
-
-    # Parse anomalies from predict result
-    anomalies: list[AnomalyScore] = []
-    if predict_result:
-        raw_anomalies = predict_result.get("anomalies", [])
-        for a in raw_anomalies:
-            try:
-                anomalies.append(AnomalyScore(**a))
-            except Exception:
-                logger.warning("Could not parse anomaly from predict response: %s", a)
-
-    anomaly_scores = [a.score for a in anomalies]
-    health_score = compute_host_health_score(error_count, warn_count, len(entries), anomaly_scores)
-    status = score_to_status(health_score)
-
-    # Step 4: Ollama log pattern analysis
+    # A1 outputs
+    service_profile: str | None = None
+    criticality: str | None = None
+    error_count: int = 0
+    warn_count: int = 0
+    health_score: float = 100.0
+    status: str = "ok"
+    anomalies: list[AnomalyScore] = field(default_factory=list)
+    top_errors: list[TopError] = field(default_factory=list)
+    top_error_msgs: list[str] = field(default_factory=list)
+    sig: dict = field(default_factory=dict)
     explanation: Explanation | None = None
-    ollama_used = False
+    ollama_used: bool = False
 
-    if top_errors or anomalies:
-        prompt = ollama_client.build_analysis_prompt(
-            hostname=hostname,
-            service_profile=service_profile,
-            criticality=criticality,
-            window_from=window_from,
-            window_to=window_to,
-            top_errors=[{"msg": e.msg, "count": e.count} for e in top_errors],
-            anomalies=[{"metric": a.metric, "score": a.score, "severity": a.severity} for a in anomalies],
-        )
-        try:
-            raw_text = await ollama_client.generate(
-                prompt=prompt,
-                model=config.ollama.model,
-                base_url=config.ollama.base_url,
-                timeout=OLLAMA_TIMEOUT,
-                temperature=config.ollama.temperature,
-            )
-            parsed = ollama_client.parse_json_response(raw_text)
-            explanation = Explanation(**parsed)
-            ollama_used = True
-        except ollama_client.OllamaError as exc:
-            logger.warning("Ollama failed for host %s: %s", hostname, exc)
+    # A3 outputs
+    mirofish_frames: list[dict] = field(default_factory=list)
 
-    # Step 5: aiops-ml /explain for gold tier (overrides Ollama if available)
-    if (
-        config.aiops_ml.enabled
-        and criticality == "gold"
-        and anomalies
-    ):
-        explain_result = await ml_client.explain(
-            host=hostname,
-            window_from=window_from,
-            window_to=window_to,
-            anomalies=[a.model_dump() for a in anomalies],
-            base_url=config.aiops_ml.base_url,
-            timeout=AIOPS_ML_TIMEOUT,
-        )
-        if explain_result:
+    # AA outputs
+    synth_result: synthesizer.SynthesisResult | None = None
+
+    # A2 outputs
+    enrichment: PerplexicaEnrichment | None = None
+
+    # trend/prediction
+    trend: str = "stable"
+    prediction: dict | None = None
+
+
+# ── Phase 1: A1 — Rule-based scoring + IF (no LLM, run all hosts in parallel) ──
+async def _phase1_a1(st: _HostState) -> None:
+    entries = st.entries
+    st.service_profile = next((e.service_profile for e in entries if e.service_profile), None)
+    st.criticality = next((e.criticality for e in entries if e.criticality), None)
+
+    st.error_count = sum(1 for e in entries if e.severity_number >= 17)
+    st.warn_count = sum(1 for e in entries if 13 <= e.severity_number <= 16)
+    st.top_errors = compute_top_errors(entries)
+    st.top_error_msgs = [e.msg for e in st.top_errors]
+
+    # Parse aiops-ml anomalies if any
+    if st.predict_result:
+        for a in st.predict_result.get("anomalies", []):
             try:
-                explanation = Explanation(**explain_result)
+                st.anomalies.append(AnomalyScore(**a))
             except Exception:
-                logger.warning("Could not parse /explain response for %s, using Ollama fallback", hostname)
+                logger.warning("Could not parse anomaly: %s", a)
 
-    # ── Persist window stats (baseline building) ──
-    # รวม messages จากทุก entries (ไม่แค่ top_errors) เพื่อ extract signals ครบทุกประเภท
+    # health score (before IF)
+    anomaly_scores = [a.score for a in st.anomalies]
+    st.health_score = compute_host_health_score(st.error_count, st.warn_count, len(entries), anomaly_scores)
+    st.status = score_to_status(st.health_score)
+
+    # Persist window stats
     all_msgs = [e.msg for e in entries if e.msg]
-    sig = extract_signals_from_messages(all_msgs)
-    top_error_msgs = [e.msg for e in top_errors]
-
+    st.sig = extract_signals_from_messages(all_msgs)
     save_window_stat(WindowStat(
-        host=hostname,
+        host=st.hostname,
         tenant_id="internal",
-        window_from=window_from,
-        window_to=window_to,
+        window_from=st.window_from,
+        window_to=st.window_to,
         entry_count=len(entries),
-        error_count=error_count,
-        warn_count=warn_count,
-        health_score=health_score,
-        top_error_msgs=top_error_msgs,
-        crash_count=sig.get("crash", 0),
-        auth_fail_count=sig.get("auth_fail", 0),
-        payment_fail_count=sig.get("payment_fail", 0),
-        network_err_count=sig.get("network_err", 0),
-        db_err_count=sig.get("db_err", 0),
-        hardware_err_count=sig.get("hardware_err", 0),
-        app_crash_count=sig.get("app_crash", 0),
+        error_count=st.error_count,
+        warn_count=st.warn_count,
+        health_score=st.health_score,
+        top_error_msgs=st.top_error_msgs,
+        crash_count=st.sig.get("crash", 0),
+        auth_fail_count=st.sig.get("auth_fail", 0),
+        payment_fail_count=st.sig.get("payment_fail", 0),
+        network_err_count=st.sig.get("network_err", 0),
+        db_err_count=st.sig.get("db_err", 0),
+        hardware_err_count=st.sig.get("hardware_err", 0),
+        app_crash_count=st.sig.get("app_crash", 0),
     ))
 
-    # ── log-ml Isolation Forest score ──
+    # log-ml Isolation Forest score
     if config.log_ml.enabled:
         if_result = await log_ml_client.score_window(
-            host=hostname,
+            host=st.hostname,
             tenant_id="internal",
-            window_from=window_from,
-            window_to=window_to,
+            window_from=st.window_from,
+            window_to=st.window_to,
             entry_count=len(entries),
-            error_count=error_count,
-            warn_count=warn_count,
-            health_score=health_score,
-            crash_count=sig.get("crash", 0),
-            auth_fail_count=sig.get("auth_fail", 0),
-            payment_fail_count=sig.get("payment_fail", 0),
-            network_err_count=sig.get("network_err", 0),
-            db_err_count=sig.get("db_err", 0),
-            hardware_err_count=sig.get("hardware_err", 0),
-            app_crash_count=sig.get("app_crash", 0),
+            error_count=st.error_count,
+            warn_count=st.warn_count,
+            health_score=st.health_score,
+            crash_count=st.sig.get("crash", 0),
+            auth_fail_count=st.sig.get("auth_fail", 0),
+            payment_fail_count=st.sig.get("payment_fail", 0),
+            network_err_count=st.sig.get("network_err", 0),
+            db_err_count=st.sig.get("db_err", 0),
+            hardware_err_count=st.sig.get("hardware_err", 0),
+            app_crash_count=st.sig.get("app_crash", 0),
             base_url=config.log_ml.base_url,
             timeout=LOG_ML_TIMEOUT,
         )
         if if_result and if_result["is_anomaly"]:
-            raw = if_result["anomaly_score"]   # negative = anomaly, closer to 0 = more anomalous
+            raw = if_result["anomaly_score"]
             severity = "high" if raw < -0.3 else "medium"
-            anomalies.append(AnomalyScore(
+            st.anomalies.append(AnomalyScore(
                 metric="isolation_forest",
                 score=round(min(1.0, abs(raw) * 2), 3),
                 severity=severity,
             ))
-            # recompute health_score with IF anomaly included
-            anomaly_scores = [a.score for a in anomalies]
-            health_score = compute_host_health_score(error_count, warn_count, len(entries), anomaly_scores)
-
-    # ── A3 MiroFish — 5-frame parallel analysis ──
-    mirofish_frames = await mirofish.analyze(
-        host=hostname,
-        health_score=health_score,
-        signal_counts=sig,
-        top_error_msgs=top_error_msgs,
-        use_llm=False,    # LLM enrichment handled by AA Synthesizer
-    )
-    mirofish_results = [MiroFishFrame(**f) for f in mirofish_frames]
-
-    # ── AA Synthesizer — LLM-as-Judge ──
-    synth_result = await synthesizer.synthesize(
-        host=hostname,
-        health_score=health_score,
-        anomalies=[a.model_dump() for a in anomalies],
-        mirofish_frames=mirofish_frames,
-        use_llm=False,
-    )
-    synthesis = Synthesis(
-        root_cause_chain=synth_result.root_cause_chain,
-        confidence=synth_result.confidence,
-        fix_steps=synth_result.fix_steps,
-        method=synth_result.method,
-        top_frame=synth_result.top_frame,
-        top_frame_lens=synth_result.top_frame_lens,
-        anomaly_methods=synth_result.anomaly_methods,
-    )
-
-    # ── A2 Perplexica — external knowledge enrichment ──
-    enrichment: PerplexicaEnrichment | None = None
-    if config.perplexica.enabled and (anomalies or any(f["relevance"] > 0 for f in mirofish_frames)):
-        top_kws = mirofish_frames[0]["top_keywords"] if mirofish_frames else []
-        query = perplexica_client.build_query(
-            top_frame=synth_result.top_frame,
-            top_keywords=top_kws,
-            top_error_msgs=top_error_msgs,
-            host=hostname,
-        )
-        perp_result = await perplexica_client.search(
-            query=query,
-            base_url=config.perplexica.base_url,
-            timeout=PERPLEXICA_TIMEOUT,
-        )
-        if perp_result:
-            enrichment = PerplexicaEnrichment(
-                query=perp_result["query"],
-                answer=perp_result["answer"],
-                sources=[PerplexicaSource(**s) for s in perp_result["sources"]],
+            # recompute with IF included
+            anomaly_scores = [a.score for a in st.anomalies]
+            st.health_score = compute_host_health_score(
+                st.error_count, st.warn_count, len(entries), anomaly_scores
             )
 
-    # ── Trend analysis + prediction ──
-    trend = analyze_trend(hostname)
-    prediction = generate_prediction(
-        host=hostname,
-        current_health=health_score,
-        trend=trend,
-        error_count=error_count,
-        warn_count=warn_count,
+    # Trend + prediction (no LLM)
+    st.trend = analyze_trend(st.hostname)
+    st.prediction = generate_prediction(
+        host=st.hostname,
+        current_health=st.health_score,
+        trend=st.trend,
+        error_count=st.error_count,
+        warn_count=st.warn_count,
         entry_count=len(entries),
-        top_error_msgs=top_error_msgs,
+        top_error_msgs=st.top_error_msgs,
+    )
+
+    logger.info("A1 done — host=%s health=%.1f anomalies=%d",
+                st.hostname, st.health_score, len(st.anomalies))
+
+
+# ── Phase 2: A3 — MiroFish 5-frame (no LLM, run all hosts in parallel) ──
+async def _phase2_a3(st: _HostState) -> None:
+    st.mirofish_frames = await mirofish.analyze(
+        host=st.hostname,
+        health_score=st.health_score,
+        signal_counts=st.sig,
+        top_error_msgs=st.top_error_msgs,
+        use_llm=False,
+    )
+    logger.info("A3 done — host=%s frames=%d", st.hostname, len(st.mirofish_frames))
+
+
+# ── Phase 3: AA Synthesizer (fast, rule-based, run all hosts in parallel) ──
+async def _phase3_aa(st: _HostState) -> None:
+    st.synth_result = await synthesizer.synthesize(
+        host=st.hostname,
+        health_score=st.health_score,
+        anomalies=[a.model_dump() for a in st.anomalies],
+        mirofish_frames=st.mirofish_frames,
+        use_llm=False,
+    )
+    logger.info("AA done — host=%s top_frame=%s confidence=%.2f",
+                st.hostname, st.synth_result.top_frame, st.synth_result.confidence)
+
+
+# ── Phase 4: A2 — Perplexica (slow LLM, run one host at a time) ──
+async def _phase4_a2(st: _HostState) -> None:
+    if not config.perplexica.enabled:
+        return
+    if not (st.anomalies or any(f["relevance"] > 0 for f in st.mirofish_frames)):
+        return
+
+    top_kws = st.mirofish_frames[0]["top_keywords"] if st.mirofish_frames else []
+    query = perplexica_client.build_query(
+        top_frame=st.synth_result.top_frame if st.synth_result else None,
+        top_keywords=top_kws,
+        top_error_msgs=st.top_error_msgs,
+        host=st.hostname,
+    )
+    logger.info("A2 start — host=%s query=%s", st.hostname, query[:80])
+
+    perp_result = await perplexica_client.search(
+        query=query,
+        base_url=config.perplexica.base_url,
+        chat_model=config.perplexica.chat_model,
+        embedding_model=config.perplexica.embedding_model,
+        timeout=PERPLEXICA_TIMEOUT,
+    )
+    if perp_result:
+        st.enrichment = PerplexicaEnrichment(
+            query=perp_result["query"],
+            answer=perp_result["answer"],
+            sources=[PerplexicaSource(**s) for s in perp_result["sources"]],
+        )
+        logger.info("A2 OK — host=%s answer_len=%d sources=%d",
+                    st.hostname, len(perp_result["answer"]), len(perp_result["sources"]))
+    else:
+        logger.info("A2 skip — host=%s (no result)", st.hostname)
+
+
+# ── Build final HostAnalysis from state ────────────────────────────────────
+def _build_host_analysis(st: _HostState) -> tuple[HostAnalysis, bool]:
+    sr = st.synth_result
+    synthesis = Synthesis(
+        root_cause_chain=sr.root_cause_chain,
+        confidence=sr.confidence,
+        fix_steps=sr.fix_steps,
+        method=sr.method,
+        top_frame=sr.top_frame,
+        top_frame_lens=sr.top_frame_lens,
+        anomaly_methods=sr.anomaly_methods,
+    ) if sr else Synthesis(
+        root_cause_chain=[], confidence=0.0, fix_steps=[], method="rule",
+        top_frame=None, top_frame_lens=None, anomaly_methods=[],
     )
 
     return HostAnalysis(
-        host=hostname,
-        service_profile=service_profile,
-        criticality=criticality,
-        entry_count=len(entries),
-        error_count=error_count,
-        warn_count=warn_count,
-        health_score=health_score,
-        status=status,
-        anomalies=anomalies,
-        top_errors=top_errors,
-        explanation=explanation,
-        trend=trend,
-        prediction=prediction,
-        mirofish=mirofish_results,
+        host=st.hostname,
+        service_profile=st.service_profile,
+        criticality=st.criticality,
+        entry_count=len(st.entries),
+        error_count=st.error_count,
+        warn_count=st.warn_count,
+        health_score=st.health_score,
+        status=st.status,
+        anomalies=st.anomalies,
+        top_errors=st.top_errors,
+        explanation=st.explanation,
+        trend=st.trend,
+        prediction=st.prediction,
+        mirofish=[MiroFishFrame(**f) for f in st.mirofish_frames],
         synthesis=synthesis,
-        enrichment=enrichment,
-    ), ollama_used
+        enrichment=st.enrichment,
+    ), st.ollama_used
 
 
+# ── Main endpoint ───────────────────────────────────────────────────────────
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
-    # Validate window ordering
     if req.window.from_ >= req.window.to:
         raise HTTPException(status_code=400, detail={"error": "window.from must be before window.to"})
 
-    # Step 1: filter + cap
     entries = filter_entries(req.entries)
-
-    # Step 2: group by host
     host_groups = group_by_host(entries)
 
     window_from = req.window.from_.isoformat().replace("+00:00", "Z")
     window_to = req.window.to.isoformat().replace("+00:00", "Z")
 
-    # Step 3: concurrent aiops-ml /predict per host
+    # aiops-ml predict (disabled by default)
     predict_results: dict[str, dict | None] = {h: None for h in host_groups}
     aiops_ml_used = False
-
     if config.aiops_ml.enabled:
         async def _predict_host(hostname: str) -> tuple[str, dict | None]:
             host_entries = host_groups[hostname]
             profile = next((e.service_profile for e in host_entries if e.service_profile), None)
             if profile and profile in KNOWN_PROFILES:
                 result = await ml_client.predict(
-                    hostnames=[hostname],
-                    window="2h",
-                    horizon="30m",
-                    base_url=config.aiops_ml.base_url,
-                    timeout=AIOPS_ML_TIMEOUT,
+                    hostnames=[hostname], window="2h", horizon="30m",
+                    base_url=config.aiops_ml.base_url, timeout=AIOPS_ML_TIMEOUT,
                 )
                 return hostname, result
             return hostname, None
-
-        predict_tasks = [_predict_host(h) for h in host_groups]
-        predict_pairs = await asyncio.gather(*predict_tasks)
-        for hostname, result in predict_pairs:
+        pairs = await asyncio.gather(*[_predict_host(h) for h in host_groups])
+        for hostname, result in pairs:
             predict_results[hostname] = result
-            if result is not None:
+            if result:
                 aiops_ml_used = True
 
-    # Steps 4-5-6: analyze each host concurrently
-    host_tasks = [
-        _analyze_host(
+    # Build state objects
+    states = [
+        _HostState(
             hostname=h,
             entries=host_groups[h],
             window_from=window_from,
@@ -312,23 +318,37 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         )
         for h in host_groups
     ]
-    results = await asyncio.gather(*host_tasks)
 
+    # ── Phase 1: A1 — all hosts in parallel (fast) ──
+    logger.info("=== Phase 1: A1 Rule+IF — %d hosts ===", len(states))
+    await asyncio.gather(*[_phase1_a1(st) for st in states])
+
+    # ── Phase 2: A3 MiroFish — all hosts in parallel (fast) ──
+    logger.info("=== Phase 2: A3 MiroFish — %d hosts ===", len(states))
+    await asyncio.gather(*[_phase2_a3(st) for st in states])
+
+    # ── Phase 3: AA Synthesizer — all hosts in parallel (fast) ──
+    logger.info("=== Phase 3: AA Synthesizer — %d hosts ===", len(states))
+    await asyncio.gather(*[_phase3_aa(st) for st in states])
+
+    # ── Phase 4: A2 Perplexica — one host at a time (slow LLM) ──
+    logger.info("=== Phase 4: A2 Perplexica — sequential ===")
+    for st in states:
+        await _phase4_a2(st)
+
+    # Assemble final response
     host_analyses: list[HostAnalysis] = []
     any_ollama_used = False
-    for ha, ollama_used in results:
+    for st in states:
+        ha, ollama_used = _build_host_analysis(st)
         host_analyses.append(ha)
         if ollama_used:
             any_ollama_used = True
 
-    # Step 6: overall health score
     overall_score = compute_overall_health_score(host_analyses)
     overall_status = score_to_status(overall_score)
-
-    # Step 7: assemble response
     summary = build_summary(host_analyses)
 
-    # ── Prometheus metrics ──
     metrics.analyze_requests_total.inc()
     metrics.record_analysis(req.tenant_id, host_analyses, overall_score, overall_status)
 

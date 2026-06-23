@@ -32,13 +32,9 @@ class GodEyeConfig(BaseModel):
 
 class PerplexicaConfig(BaseModel):
     base_url: str = "http://localhost:3001"
-    timeout: str = "30s"
-    enabled: bool = False
-
-
-class PerplexicaConfig(BaseModel):
-    base_url: str = "http://localhost:3001"
-    timeout: str = "30s"
+    timeout: str = "300s"
+    chat_model: str = "qwen3.6:27b"
+    embedding_model: str = "nomic-embed-text:latest"
     enabled: bool = False
 
 
@@ -83,13 +79,37 @@ def _parse_timeout(value: str) -> float:
     return float(value)
 
 
+def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
+    """Allow key settings to be overridden via environment variables."""
+    env = os.environ
+    if v := env.get("OLLAMA_BASE_URL"):
+        cfg.ollama.base_url = v
+    if v := env.get("OLLAMA_MODEL"):
+        cfg.ollama.model = v
+    if v := env.get("LOG_ML_BASE_URL"):
+        cfg.log_ml.base_url = v
+    if v := env.get("LOG_ML_ENABLED"):
+        cfg.log_ml.enabled = v.lower() not in ("0", "false", "no")
+    if v := env.get("PERPLEXICA_BASE_URL"):
+        cfg.perplexica.base_url = v
+    if v := env.get("PERPLEXICA_ENABLED"):
+        cfg.perplexica.enabled = v.lower() not in ("0", "false", "no")
+    if v := env.get("PERPLEXICA_CHAT_MODEL"):
+        cfg.perplexica.chat_model = v
+    if v := env.get("CALLBACK_URL"):
+        cfg.godeye.callback_url = v
+    if v := env.get("CALLBACK_ENABLED"):
+        cfg.godeye.enabled = v.lower() not in ("0", "false", "no")
+    return cfg
+
+
 def load_config() -> AppConfig:
     for path in ("config.yaml", "config.yaml.example"):
         if os.path.exists(path):
             with open(path) as f:
                 data = yaml.safe_load(f) or {}
-            return AppConfig.model_validate(data)
-    return AppConfig()
+            return _apply_env_overrides(AppConfig.model_validate(data))
+    return _apply_env_overrides(AppConfig())
 
 
 config = load_config()
