@@ -1,18 +1,4 @@
 services:
-  # ── A1 — Log Analyzer ──────────────────────────────────────────────
-  log-analyzer:
-    build: ./log-analyzer
-    ports:
-      - "8200:8200"
-    volumes:
-      - log-analyzer-db:/app/data
-    environment:
-      - PYTHONUNBUFFERED=1
-    depends_on:
-      - log-ml
-      - perplexica
-    restart: unless-stopped
-
   # ── A1 — Isolation Forest ML ────────────────────────────────────────
   log-ml:
     build: ./log-ml
@@ -26,36 +12,83 @@ services:
       - ML_CONTAMINATION=0.05
     restart: unless-stopped
 
-  # ── A2 — SearXNG (search engine for Perplexica) ───────────────────
-  searxng:
-    image: docker.io/searxng/searxng:latest
+  # ── A1+A3+AA — Log Analyzer ─────────────────────────────────────────
+  log-analyzer:
+    build: ./log-analyzer
     ports:
-      - "4000:8080"
+      - "8200:8200"
     volumes:
-      - ./searxng:/etc/searxng:rw
+      - log-analyzer-db:/app/data
     environment:
-      - SEARXNG_BASE_URL=http://searxng:8080/
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - SETGID
-      - SETUID
-    restart: unless-stopped
-
-  # ── A2 — Perplexica (Vane) ────────────────────────────────────────
-  # Ollama URL ใน container ต้องเป็น host.docker.internal:11434
-  # (ไม่ใช่ Tailscale IP โดยตรง — ต้องผ่าน host เป็น bridge)
-  perplexica:
-    image: itzcrazykns1337/vane:latest
-    ports:
-      - "3001:3000"
-    volumes:
-      - perplexica-data:/home/vane/data
+      - PYTHONUNBUFFERED=1
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3.6:27b}
+      - LOG_ML_BASE_URL=http://log-ml:3050
+      - PERPLEXICA_BASE_URL=http://vane:3001
+      - PERPLEXICA_ENABLED=${PERPLEXICA_ENABLED:-true}
+      - PERPLEXICA_CHAT_MODEL=${PERPLEXICA_CHAT_MODEL:-qwen3.6:27b}
+      - CALLBACK_URL=http://logsim-backend:8071/api/analysis-callback
+      - CALLBACK_ENABLED=${CALLBACK_ENABLED:-true}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - searxng
+      - log-ml
+      - vane
+    restart: unless-stopped
+
+
+  # ── log-analyzer frontend ────────────────────────────────────────────
+  log-analyzer-ui:
+    build:
+      context: ./log-analyzer/frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3100:3100"
+    environment:
+      - PORT=3100
+      - API_BASE_URL=http://log-analyzer:8200
+      - PERPLEXICA_BASE_URL=http://vane:3001
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - log-analyzer
+    restart: unless-stopped
+
+  # ── A2 — Vane (Perplexica + bundled SearXNG) ────────────────────────
+  vane:
+    build: ./perplexica-src
+    ports:
+      - "3001:3001"
+      - "4000:8080"
+    volumes:
+      - vane-data:/home/vane/data
+    environment:
+      - PORT=3001
+      - DATA_DIR=/home/vane
+      - SEARXNG_API_URL=http://localhost:8080
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # ── LogSim backend ──────────────────────────────────────────────────
+  logsim-backend:
+    build: ../../logsim/backend
+    ports:
+      - "8071:8071"
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+
+  # ── LogSim frontend ─────────────────────────────────────────────────
+  logsim-frontend:
+    build: ../../logsim/frontend
+    ports:
+      - "3200:3200"
+    environment:
+      - PORT=3200
+    depends_on:
+      - logsim-backend
     restart: unless-stopped
 
   # ── Observability — Prometheus ──────────────────────────────────────
@@ -90,6 +123,6 @@ services:
 volumes:
   log-analyzer-db:
   log-ml-models:
-  perplexica-data:
+  vane-data:
   prometheus-data:
   grafana-data:
