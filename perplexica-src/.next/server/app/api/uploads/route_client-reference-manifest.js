@@ -1,0 +1,1 @@
+globalThis.__RSC_MANIFEST=(globalThis.__RSC_MANIFEST||{});globalThis.__RSC_MANIFEST["/api/uploads/route"]={"moduleLoading":{"prefix":"/_next/"},"ssrModuleMapping":{},"edgeSSRModuleMapping":{},"clientModules":{},"entryCSSFiles":{"/Users/sumate/Desktop/project/godeyes/perplexica-src/src/app/api/uploads/route":[]},"rscModuleMapping":{},"edgeRscModuleMapping":{}};

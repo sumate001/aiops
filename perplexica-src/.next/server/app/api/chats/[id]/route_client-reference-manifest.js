@@ -1,0 +1,1 @@
+globalThis.__RSC_MANIFEST=(globalThis.__RSC_MANIFEST||{});globalThis.__RSC_MANIFEST["/api/chats/[id]/route"]={"moduleLoading":{"prefix":"/_next/"},"ssrModuleMapping":{},"edgeSSRModuleMapping":{},"clientModules":{},"entryCSSFiles":{"/Users/sumate/Desktop/project/godeyes/perplexica-src/src/app/api/chats/[id]/route":[]},"rscModuleMapping":{},"edgeRscModuleMapping":{}};
