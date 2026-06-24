@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, Response
 
 from app.config import config
 from app.routers import analyze, health, ingest
@@ -54,15 +54,6 @@ async def prometheus_metrics():
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
-
-_static_dir = os.path.join(os.path.dirname(__file__), "static")
-if os.path.isdir(_static_dir):
-    from fastapi.staticfiles import StaticFiles
-    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
-
-    @app.get("/")
-    async def dashboard():
-        return FileResponse(os.path.join(_static_dir, "index.html"))
 
 
 @app.exception_handler(Exception)
