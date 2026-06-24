@@ -54,7 +54,7 @@ async def _do_search(
     embedding_model: str,
     timeout: float,
 ) -> dict | None:
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=timeout, write=30)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10, read=timeout, write=30)) as client:
         provider_id = await _get_ollama_provider_id(base_url, client)
         if not provider_id:
             logger.warning("Cannot find Ollama provider in Perplexica")
