@@ -1,5 +1,0 @@
-node_modules/
-.next/cache/
-.next/dev/
-yarn.lock
-*.log

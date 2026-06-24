@@ -1,1 +1,0 @@
-self.__NEXT_FONT_MANIFEST='{"pages":{},"app":{"/Users/sumate/Desktop/project/godeyes/perplexica-src/src/app/layout":["static/media/904be59b21bd51cb-s.p.woff2"]},"appUsingSizeAdjust":true,"pagesUsingSizeAdjust":false}';
