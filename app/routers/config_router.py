@@ -19,6 +19,8 @@ class ConfigUpdate(BaseModel):
     log_ml_base_url: str = "http://localhost:3050"
     perplexica_enabled: bool = False
     perplexica_base_url: str = "http://localhost:3001"
+    perplexica_chat_model: str = "qwen3.6:27b"
+    perplexica_embedding_model: str = "nomic-embed-text:latest"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5:14b"
 
@@ -38,6 +40,8 @@ async def get_config() -> dict:
         "perplexica": {
             "base_url": config.perplexica.base_url,
             "enabled": config.perplexica.enabled,
+            "chat_model": config.perplexica.chat_model,
+            "embedding_model": config.perplexica.embedding_model,
         },
         "ollama": {
             "base_url": config.ollama.base_url,
@@ -74,6 +78,8 @@ async def update_config(body: ConfigUpdate) -> dict:
         data.setdefault("perplexica", {})
         data["perplexica"]["enabled"] = body.perplexica_enabled
         data["perplexica"]["base_url"] = body.perplexica_base_url
+        data["perplexica"]["chat_model"] = body.perplexica_chat_model
+        data["perplexica"]["embedding_model"] = body.perplexica_embedding_model
 
         data.setdefault("ollama", {})
         data["ollama"]["base_url"] = body.ollama_base_url

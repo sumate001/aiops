@@ -4,7 +4,7 @@ import Link from "next/link";
 type ConfigData = {
   godeye: { callback_url: string | null; enabled: boolean };
   log_ml: { base_url: string; enabled: boolean };
-  perplexica: { base_url: string; enabled: boolean };
+  perplexica: { base_url: string; enabled: boolean; chat_model: string; embedding_model: string };
   ollama: { base_url: string; model: string; timeout: string; temperature: number };
   aiops_ml: { base_url: string; enabled: boolean };
 };
@@ -21,6 +21,8 @@ export default function Settings() {
     log_ml_base_url: "http://localhost:3050",
     perplexica_enabled: false,
     perplexica_base_url: "http://localhost:3001",
+    perplexica_chat_model: "qwen3.6:27b",
+    perplexica_embedding_model: "nomic-embed-text:latest",
     ollama_base_url: "http://localhost:11434",
     ollama_model: "qwen2.5:14b",
   });
@@ -64,7 +66,10 @@ export default function Settings() {
           ?.filter((m: any) => m.key !== "error")
           .map((m: any) => m.key) ?? [];
         setPerplexicaModels(models);
-        if (models.length > 0) setPerplexicaCfg((prev) => ({ ...prev, chat_model: prev.chat_model || models[0] }));
+        if (models.length > 0) {
+          setPerplexicaCfg((prev) => ({ ...prev, chat_model: prev.chat_model || models[0] }));
+          setForm((prev) => ({ ...prev, perplexica_chat_model: prev.perplexica_chat_model || models[0] }));
+        }
       }
     } catch {}
   };
@@ -98,6 +103,8 @@ export default function Settings() {
           log_ml_base_url: data.log_ml.base_url,
           perplexica_enabled: data.perplexica.enabled,
           perplexica_base_url: data.perplexica.base_url,
+          perplexica_chat_model: data.perplexica.chat_model || "qwen3.6:27b",
+          perplexica_embedding_model: data.perplexica.embedding_model || "nomic-embed-text:latest",
           ollama_base_url: data.ollama.base_url,
           ollama_model: data.ollama.model,
         });
@@ -212,8 +219,8 @@ export default function Settings() {
                   </label>
                   <select
                     className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
-                    value={perplexicaCfg.chat_model}
-                    onChange={(e) => setPerplexicaCfg({ ...perplexicaCfg, chat_model: e.target.value })}
+                    value={form.perplexica_chat_model}
+                    onChange={(e) => setForm({ ...form, perplexica_chat_model: e.target.value })}
                   >
                     {models.map((m) => <option key={m} value={m}>{m}</option>)}
                   </select>
