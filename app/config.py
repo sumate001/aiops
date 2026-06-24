@@ -33,14 +33,14 @@ class GodEyeConfig(BaseModel):
 class PerplexicaConfig(BaseModel):
     base_url: str = "http://localhost:3001"
     timeout: str = "300s"
-    chat_model: str = "qwen3.6:27b"
+    chat_model: str = "gemma4:e4b"
     embedding_model: str = "nomic-embed-text:latest"
     enabled: bool = False
 
 
 class OllamaConfig(BaseModel):
     base_url: str = "http://localhost:11434"
-    model: str = "qwen2.5:14b"
+    model: str = "gemma4:e4b"
     timeout: str = "120s"
     temperature: float = 0.1
 

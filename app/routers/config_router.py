@@ -19,10 +19,10 @@ class ConfigUpdate(BaseModel):
     log_ml_base_url: str = "http://localhost:3050"
     perplexica_enabled: bool = False
     perplexica_base_url: str = "http://localhost:3001"
-    perplexica_chat_model: str = "qwen3.6:27b"
+    perplexica_chat_model: str = "gemma4:e4b"
     perplexica_embedding_model: str = "nomic-embed-text:latest"
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen2.5:14b"
+    ollama_model: str = "gemma4:e4b"
 
 
 @router.get("/config")

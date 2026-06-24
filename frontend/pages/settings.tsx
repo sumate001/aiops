@@ -21,10 +21,10 @@ export default function Settings() {
     log_ml_base_url: "http://localhost:3050",
     perplexica_enabled: false,
     perplexica_base_url: "http://localhost:3001",
-    perplexica_chat_model: "qwen3.6:27b",
+    perplexica_chat_model: "gemma4:e4b",
     perplexica_embedding_model: "nomic-embed-text:latest",
     ollama_base_url: "http://localhost:11434",
-    ollama_model: "qwen2.5:14b",
+    ollama_model: "gemma4:e4b",
   });
 
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
@@ -103,7 +103,7 @@ export default function Settings() {
           log_ml_base_url: data.log_ml.base_url,
           perplexica_enabled: data.perplexica.enabled,
           perplexica_base_url: data.perplexica.base_url,
-          perplexica_chat_model: data.perplexica.chat_model || "qwen3.6:27b",
+          perplexica_chat_model: data.perplexica.chat_model || "gemma4:e4b",
           perplexica_embedding_model: data.perplexica.embedding_model || "nomic-embed-text:latest",
           ollama_base_url: data.ollama.base_url,
           ollama_model: data.ollama.model,

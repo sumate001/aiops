@@ -86,7 +86,7 @@ async def _do_search(
 async def search(
     query: str,
     base_url: str = "http://localhost:3001",
-    chat_model: str = "qwen3.6:27b",
+    chat_model: str = "gemma4:e4b",
     embedding_model: str = "nomic-embed-text:latest",
     timeout: float = 300.0,
 ) -> dict | None:
