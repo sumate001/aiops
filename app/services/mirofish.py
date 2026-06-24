@@ -80,6 +80,8 @@ FRAMES: list[Frame] = [
             "disk error", "oom", "out of memory", "kill process",
             "ext4-fs error", "i/o error", "hardware failure", "ecc",
             "temperature", "fan", "nvme", "raid", "no space left",
+            "maxmemory", "evicting keys", "eviction", "memory limit",
+            "memory exhausted", "used_memory", "mem_allocator",
         ],
         pos_context=(
             "You are a systems engineer. Focus on physical hardware degradation, "
@@ -94,6 +96,8 @@ FRAMES: list[Frame] = [
             "segfault", "exception", "stack overflow", "heap", "oom",
             "restart", "crash", "panic", "fatal error", "unhandled",
             "systemd", "service failed", "exit code",
+            "redis", "maxmemory reached", "evicting", "allkeys-lru",
+            "key eviction", "cache eviction",
         ],
         pos_context=(
             "You are a senior SRE. Focus on application crashes, memory leaks, "

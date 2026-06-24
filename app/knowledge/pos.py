@@ -104,6 +104,8 @@ POS_SIGNAL_PATTERNS: dict[str, list[str]] = {
         "unresponsive", "watchdog triggered", "stack overflow",
         "out of memory", "gc pause", "garbage collection",
         "memory usage", "heap", "application crash",
+        "maxmemory", "evicting keys", "eviction policy", "allkeys-lru",
+        "key eviction", "redis oom", "cache full",
     ],
     "crash": [
         "terminated unexpectedly", "crashed", "restart the service",

@@ -40,12 +40,14 @@ async def pipeline_status() -> dict:
         try:
             async with httpx.AsyncClient(timeout=3.0) as client:
                 r = await client.get(f"{url}{path}")
-                return {"status": "up", "code": r.status_code}
+                if r.status_code == 200:
+                    return {"status": "up", "code": r.status_code}
+                return {"status": "down", "code": r.status_code}
         except Exception as exc:
             return {"status": "down", "error": str(exc)[:80]}
 
     log_ml = await _check(config.log_ml.base_url) if config.log_ml.enabled else {"status": "disabled"}
-    perplexica = await _check(config.perplexica.base_url, "/") if config.perplexica.enabled else {"status": "disabled"}
+    perplexica = await _check(config.perplexica.base_url, "/api/providers") if config.perplexica.enabled else {"status": "disabled"}
     ollama = await _check(config.ollama.base_url, "/api/tags") if True else {"status": "disabled"}
 
     return {
