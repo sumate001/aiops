@@ -25,3 +25,8 @@ model_store/
 
 # OS
 .DS_Store
+
+# Perplexica / Next.js
+perplexica-src/node_modules/
+perplexica-src/.next/cache/
+perplexica-src/yarn.lock
