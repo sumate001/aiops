@@ -32,7 +32,7 @@ class GodEyeConfig(BaseModel):
 
 class PerplexicaConfig(BaseModel):
     base_url: str = "http://localhost:3001"
-    timeout: str = "300s"
+    timeout: str = "480s"  # remote Ollama is CPU-bound (~10 tok/s); A2 answer gen can take 4-7 min
     chat_model: str = "gemma4:e4b"
     embedding_model: str = "nomic-embed-text:latest"
     enabled: bool = False
