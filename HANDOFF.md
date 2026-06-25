@@ -8,7 +8,7 @@
 |-------|--------|----------|
 | A1 Rule | ✅ ทำงาน | |
 | A1 IF (log-ml) | ✅ ทำงาน | รันที่ port 3050 |
-| A2 Perplexica | ⚠️ **ค้าง** | ได้ถึง SearXNG (19 sources) แต่ LLM ไม่ตอบใน 180s |
+| A2 Perplexica | ✅ ทำงาน | verify ผ่าน pipeline จริง 265s (5 sources, answer 2000 ตัว) |
 | A3 MiroFish | ✅ ทำงาน | Redis scenario → Software=100%, Hardware=20% |
 | AA Synthesizer | ✅ ทำงาน | |
 
@@ -21,27 +21,17 @@
   - แก้ใน `perplexica-src/.next/standalone/.next/server/chunks/136.js` (backup: `136.js.bak`)
   - แก้ source ด้วยที่ `perplexica-src/src/lib/models/providers/ollama/index.ts`
 
-## ⚠️ ปัญหา A2 ที่ยังต้อง debug ต่อ
+## ✅ A2 แก้แล้ว — สาเหตุ & วิธีแก้
 
-**อาการ:** search request เชื่อมต่อได้ (`init` event), SearXNG คืน 19 sources (`sources` event)
-แต่ **ไม่มี `response` chunk เลย** ใน 180s — ไม่มี error ใน log ด้วย (ค้างเงียบ)
+**สาเหตุจริง:** remote Ollama (100.94.37.18) รัน inference บน **CPU** = ~9.8 tok/s
+(วัดได้: load 11s, prompt eval 42 tok/s, gen 9.8 tok/s) Perplexica สร้างคำตอบ ~1500 tok
++ prompt eval ของ context 20 docs → รวม 225-300s+ เกิน timeout เดิม 300s
 
-**Flow ที่น่าสงสัย:** query → SearXNG (✅ 19 docs) → rerank ด้วย embedding (nomic-embed-text)
-→ LLM generate answer (gemma4:e4b)
+**แก้:** เพิ่ม `perplexica.timeout` → **480s** (ทั้ง `app/config.py` default และ `config.yaml`)
+verify ผ่าน pipeline จริง: A2 OK ใน 265s, answer 2000 ตัว, 5 sources
 
-**ขั้นถัดไปที่ยังไม่ได้ทำ (โดน interrupt):** วัดความเร็วแยกทีละขั้น
-```bash
-# embedding speed
-curl -s -o /dev/null -w "embed: %{http_code} time=%{time_total}s\n" --max-time 60 \
-  -X POST http://100.94.37.18:11434/api/embed \
-  -d '{"model":"nomic-embed-text:latest","input":"redis maxmemory oom error fix"}'
-
-# chat speed (warm)
-curl -s -o /dev/null -w "chat: %{http_code} time=%{time_total}s\n" --max-time 60 \
-  -X POST http://100.94.37.18:11434/api/chat \
-  -d '{"model":"gemma4:e4b","messages":[{"role":"user","content":"explain redis maxmemory oom in 2 sentences"}],"stream":false}'
-```
-สมมติฐาน: rerank 19 docs ผ่าน remote nomic-embed-text ทีละตัวอาจช้ามาก หรือ chat generation ค้าง
+**ถ้าจะเร่งให้เร็วขึ้น (อนาคต):** ย้าย Ollama ไปเครื่อง GPU, ตั้ง keep_alive กัน reload,
+หรือลด num_ctx (ตอนนี้ 32000 ใน Perplexica standalone JS)
 
 ## 🔧 สิ่งที่ต้องทำตอน setup เครื่องใหม่
 
