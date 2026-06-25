@@ -35,12 +35,11 @@ verify ผ่าน pipeline จริง: A2 OK ใน 265s, answer 2000 ตั
 
 ## 🔧 สิ่งที่ต้องทำตอน setup เครื่องใหม่
 
-1. รัน `setup.sh` → clone Perplexica จาก fork `sumate001/Vane` + start SearXNG docker (port 4000)
-2. สร้าง `config.yaml` (gitignored) — copy จากเครื่องเดิม หรือใช้ default จากโค้ด (เป็น e4b แล้ว)
-3. **Re-apply Perplexica Ollama patch** (จะหายเพราะ deploy clone สด):
-   - แก้ `loadChatModel` / `loadEmbeddingModel` ใน chunk JS ให้ wrap live-check ด้วย try-catch
-   - ดู diff ได้จาก `perplexica-src/.next/standalone/.next/server/chunks/136.js.bak` (ของเดิม)
-4. Start services:
+1. รัน `setup.sh` → clone Perplexica จาก fork `sumate001/Vane` + `npm run build` + start SearXNG docker (port 4000)
+   - **ต้องใช้ Node >= 18 (แนะนำ 22)** — setup.sh เช็คให้แล้ว ถ้า Node เก่าจะ exit พร้อมแจ้งเตือน
+   - ✅ **Ollama patch อยู่ใน fork `sumate001/Vane` แล้ว** (commit 1e682a7) — build ออกมามี bypass ติดมาเลย **ไม่ต้อง re-apply เอง**
+2. สร้าง `config.yaml` (gitignored) — copy จากเครื่องเดิม หรือใช้ default จากโค้ด (e4b + timeout 480s แล้ว)
+3. Start services:
    - log-ml: `cd aiops/log-ml && ~/.pyenv/versions/3.14.0/bin/uvicorn app.main:app --host 0.0.0.0 --port 3050`
    - aiops backend: port 8200
    - aiops frontend: port 3002 (Node 22)

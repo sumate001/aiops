@@ -17,6 +17,20 @@ echo "=== [1/5] Python dependencies ==="
 "$PYTHON" -m pip install -r requirements.txt -q
 
 echo "=== [2/5] Perplexica (Vane) ==="
+# Vane builds with the Next.js standalone output and requires Node >= 18
+# (Node 22 recommended). Older Node (e.g. 15) fails the build with
+# "Cannot find module '../server/require-hook'" / "Cannot find module 'node:crypto'".
+NODE_MAJOR="$(node -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
+if [ -z "$NODE_MAJOR" ]; then
+  echo "  ERROR: node not found. Install Node 22 (e.g. nvm install 22 && nvm use 22)." >&2
+  exit 1
+elif [ "$NODE_MAJOR" -lt 18 ]; then
+  echo "  ERROR: Node $NODE_MAJOR detected — Vane build needs Node >= 18 (22 recommended)." >&2
+  echo "         Run 'nvm use 22' (or install it) before re-running setup.sh." >&2
+  exit 1
+fi
+echo "  using Node $(node -v)"
+
 if [ ! -d perplexica-src ]; then
   git clone https://github.com/sumate001/Vane perplexica-src
   cd perplexica-src
@@ -66,8 +80,8 @@ echo "  # log-ml — Isolation Forest (port $PORT_LOG_ML)"
 echo "  cd log-ml && uvicorn app.main:app --host 0.0.0.0 --port $PORT_LOG_ML"
 echo ""
 echo "  # Perplexica / Vane (port $NODE_PORT_VANE)"
-echo "  cd perplexica-src/.next/standalone"
-echo "  PORT=$NODE_PORT_VANE SEARXNG_API_URL=http://localhost:$PORT_SEARXNG DATA_DIR=\$(pwd)/.. node server.js"
+echo "  cd perplexica-src/.next/standalone   # needs Node >= 18"
+echo "  PORT=$NODE_PORT_VANE SEARXNG_API_URL=http://localhost:$PORT_SEARXNG OLLAMA_BASE_URL=http://localhost:11434 DATA_DIR=\$(pwd)/../.. node server.js"
 echo ""
 echo "  # aiops frontend (port $NODE_PORT_UI)"
 echo "  cd frontend && PORT=$NODE_PORT_UI npm run dev"
