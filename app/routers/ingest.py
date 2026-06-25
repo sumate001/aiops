@@ -11,6 +11,7 @@ import json
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from app.config import config
 from app.models.ingest import GodEyesIngestRequest
@@ -27,6 +28,16 @@ logger = logging.getLogger(__name__)
 async def _run_analyze(analyze_dict: dict) -> AnalyzeResponse:
     req = AnalyzeRequest.model_validate(analyze_dict)
     return await analyze(req)
+
+
+async def _analyze_and_callback(analyze_dict: dict, callback_url: str) -> None:
+    """Background path: run the (slow, A2-heavy) pipeline then POST the result
+    to the callback. Keeps /ingest from blocking the caller for minutes."""
+    try:
+        result = await _run_analyze(analyze_dict)
+        await webhook.send(callback_url, result.model_dump(mode="json"))
+    except Exception:
+        logger.exception("Background analyze/callback failed")
 
 
 @router.post("/ingest", response_model=AnalyzeResponse)
@@ -90,10 +101,22 @@ async def ingest(request: Request) -> AnalyzeResponse:
         tenant_id,
     )
 
-    result = await _run_analyze(analyze_dict)
-
-    # ── Webhook callback → GodEye (fire-and-forget) ──
+    # ── Async path: when a callback is configured, run the pipeline in the
+    # background and return 202 immediately. The analysis (esp. A2 Perplexica
+    # on CPU-bound Ollama) can take several minutes; blocking here would make
+    # the caller time out (e.g. logsim streaming reported "0 lines sent").
+    # The result is delivered via the callback when ready.
     if callback_url and config.godeye.enabled:
-        asyncio.create_task(webhook.send(callback_url, result.model_dump(mode="json")))
+        asyncio.create_task(_analyze_and_callback(analyze_dict, callback_url))
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "accepted",
+                "request_id": request_id,
+                "entries": len(analyze_dict["entries"]),
+                "callback_url": callback_url,
+            },
+        )
 
-    return result
+    # ── Sync path: no callback → caller wants the result inline. ──
+    return await _run_analyze(analyze_dict)
