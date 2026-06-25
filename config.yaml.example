@@ -21,12 +21,14 @@ log_ml:
 
 perplexica:
   base_url: "http://localhost:3001"   # A2 Perplexica (SearXNG + AI synthesis)
-  timeout: "30s"
-  enabled: false   # true = enrich analysis with external search results
+  chat_model: "gemma4:e4b"            # ต้องมีใน Ollama (ดู /api/tags)
+  embedding_model: "nomic-embed-text:latest"
+  timeout: "480s"   # A2 ช้าเมื่อ Ollama รันบน CPU (~10 tok/s) — เผื่อ 4-7 นาที/host
+  enabled: true     # false = ข้าม external search enrichment
 
 ollama:
-  base_url: "http://localhost:11434"
-  model: "qwen2.5:14b"       # ปรับตาม model ที่ deploy ไว้
+  base_url: "http://localhost:11434"   # remote เช่น http://100.x.x.x:11434 (Tailscale)
+  model: "gemma4:e4b"        # ปรับตาม model ที่ deploy ไว้ (ดู /api/tags)
   timeout: "120s"
   temperature: 0.1            # ต่ำ = consistent, factual
 

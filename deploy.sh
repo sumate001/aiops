@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# deploy.sh — one-command deploy for the whole aiops stack.
+#
+#   bash deploy.sh           # install (if needed) + start everything
+#   bash deploy.sh --start   # skip install, just (re)start services
+#   bash deploy.sh --stop    # stop all services started by this script
+#   bash deploy.sh --status  # show health of every service
+#
+# Services started:
+#   SearXNG (docker, :4000)  log-ml/A1-IF (:3050)  Perplexica/Vane (:3001)
+#   aiops backend (:8200)    aiops frontend (:3002)
+#
+# Env overrides: OLLAMA_BASE_URL, PYTHON, PORT_* (see below).
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# ── Ports / config ──────────────────────────────────────────────────────────
+PORT_BACKEND="${PORT_BACKEND:-8200}"
+PORT_LOG_ML="${PORT_LOG_ML:-3050}"
+PORT_VANE="${PORT_VANE:-3001}"
+PORT_UI="${PORT_UI:-3002}"
+PORT_SEARXNG="${PORT_SEARXNG:-4000}"
+OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434}"
+
+LOG_DIR="$SCRIPT_DIR/logs"
+RUN_DIR="$SCRIPT_DIR/.run"
+PYTHON="${PYTHON:-$(command -v python3.14 || command -v python3 || true)}"
+
+mkdir -p "$LOG_DIR" "$RUN_DIR"
+
+c_info='\033[1;36m'; c_ok='\033[1;32m'; c_warn='\033[1;33m'; c_err='\033[1;31m'; c_off='\033[0m'
+log()  { printf "${c_info}[deploy]${c_off} %s\n" "$*"; }
+ok()   { printf "${c_ok}[deploy]${c_off} %s\n" "$*"; }
+warn() { printf "${c_warn}[deploy]${c_off} %s\n" "$*"; }
+die()  { printf "${c_err}[deploy] ERROR:${c_off} %s\n" "$*" >&2; exit 1; }
+
+port_up() { lsof -i ":$1" -sTCP:LISTEN -t >/dev/null 2>&1; }
+
+wait_health() { # url, name, tries
+  local url="$1" name="$2" tries="${3:-30}"
+  for _ in $(seq 1 "$tries"); do
+    if curl -s -o /dev/null --max-time 3 "$url"; then ok "$name is up"; return 0; fi
+    sleep 1
+  done
+  warn "$name did not answer at $url yet (check $LOG_DIR)"
+}
+
+# Start a backgrounded service unless its port is already listening.
+# start_svc <name> <port> <logfile> <command...>
+start_svc() {
+  local name="$1" port="$2" logf="$3"; shift 3
+  if port_up "$port"; then ok "$name already running on :$port"; return; fi
+  log "starting $name on :$port"
+  nohup "$@" >"$LOG_DIR/$logf" 2>&1 &
+  echo $! >"$RUN_DIR/$name.pid"
+}
+
+# ── Prerequisite checks ─────────────────────────────────────────────────────
+check_prereqs() {
+  [ -n "$PYTHON" ] && command -v "$PYTHON" >/dev/null || die "python not found (need 3.11+; 3.14 recommended)"
+  command -v node >/dev/null || die "node not found — install Node 22 (nvm install 22 && nvm use 22)"
+  local nmaj; nmaj="$(node -v | sed -E 's/^v([0-9]+).*/\1/')"
+  [ "$nmaj" -ge 18 ] || die "Node $nmaj too old — Vane build needs >=18 (run 'nvm use 22')"
+  command -v docker >/dev/null || die "docker not found — required for SearXNG"
+  docker info >/dev/null 2>&1 || die "docker daemon not running — start Docker Desktop first"
+  ok "prereqs OK — $("$PYTHON" --version 2>&1), node $(node -v), docker present"
+}
+
+# ── Install ─────────────────────────────────────────────────────────────────
+install_all() {
+  log "[1/4] Python dependencies (backend + log-ml)"
+  "$PYTHON" -m pip install -q -r requirements.txt
+  [ -f log-ml/requirements.txt ] && "$PYTHON" -m pip install -q -r log-ml/requirements.txt
+
+  log "[2/4] Perplexica (Vane) — clone + build (Node $(node -v))"
+  if [ ! -d perplexica-src ]; then
+    git clone https://github.com/sumate001/Vane perplexica-src
+    ( cd perplexica-src && npm install && npm run build )
+  else
+    ok "perplexica-src exists — skipping clone/build (delete it to rebuild)"
+  fi
+  if [ ! -f perplexica-src/data/config.json ] && [ -f perplexica-src/data/config.json.example ]; then
+    cp perplexica-src/data/config.json.example perplexica-src/data/config.json
+  fi
+
+  log "[3/4] Frontend dependencies"
+  [ -d frontend/node_modules ] || ( cd frontend && npm install )
+
+  log "[4/4] config.yaml"
+  if [ ! -f config.yaml ] && [ -f config.yaml.example ]; then
+    cp config.yaml.example config.yaml
+    warn "created config.yaml from example — set ollama.base_url / perplexica before heavy use"
+  fi
+  ok "install complete"
+}
+
+# ── Start ───────────────────────────────────────────────────────────────────
+start_all() {
+  # SearXNG (docker)
+  if docker ps --format '{{.Names}}' | grep -q '^aiops-searxng$'; then
+    ok "SearXNG already running"
+  elif docker ps -a --format '{{.Names}}' | grep -q '^aiops-searxng$'; then
+    log "starting existing SearXNG container"; docker start aiops-searxng >/dev/null
+  else
+    log "creating SearXNG container on :$PORT_SEARXNG"
+    docker run -d --name aiops-searxng -p "${PORT_SEARXNG}:8080" \
+      -e SEARXNG_SECRET="$(openssl rand -hex 32)" searxng/searxng:latest >/dev/null
+  fi
+
+  start_svc log-ml "$PORT_LOG_ML" log-ml.log \
+    "$PYTHON" -m uvicorn app.main:app --app-dir log-ml --host 0.0.0.0 --port "$PORT_LOG_ML"
+
+  start_svc perplexica "$PORT_VANE" perplexica.log \
+    env PORT="$PORT_VANE" SEARXNG_API_URL="http://localhost:$PORT_SEARXNG" \
+        OLLAMA_BASE_URL="$OLLAMA_BASE_URL" \
+        DATA_DIR="$SCRIPT_DIR/perplexica-src" \
+        node "$SCRIPT_DIR/perplexica-src/.next/standalone/server.js"
+
+  start_svc backend "$PORT_BACKEND" backend.log \
+    "$PYTHON" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT_BACKEND"
+
+  start_svc frontend "$PORT_UI" frontend.log \
+    env PORT="$PORT_UI" npm --prefix frontend run dev
+
+  log "waiting for services…"
+  wait_health "http://localhost:$PORT_LOG_ML/healthz"        "log-ml"
+  wait_health "http://localhost:$PORT_SEARXNG/healthz"       "SearXNG"
+  wait_health "http://localhost:$PORT_VANE/api/providers"    "Perplexica"
+  wait_health "http://localhost:$PORT_BACKEND/health"        "backend"
+  wait_health "http://localhost:$PORT_UI"                    "frontend"
+  status_all
+}
+
+# ── Stop ────────────────────────────────────────────────────────────────────
+stop_all() {
+  for name in frontend backend perplexica log-ml; do
+    local pidf="$RUN_DIR/$name.pid"
+    if [ -f "$pidf" ]; then
+      local pid; pid="$(cat "$pidf")"
+      if kill "$pid" 2>/dev/null; then ok "stopped $name (pid $pid)"; else warn "$name not running"; fi
+      rm -f "$pidf"
+    fi
+  done
+  if docker ps --format '{{.Names}}' | grep -q '^aiops-searxng$'; then
+    docker stop aiops-searxng >/dev/null && ok "stopped SearXNG"
+  fi
+}
+
+# ── Status ──────────────────────────────────────────────────────────────────
+status_all() {
+  printf "\n${c_info}=== Service status ===${c_off}\n"
+  for entry in "backend:$PORT_BACKEND" "frontend:$PORT_UI" "perplexica:$PORT_VANE" \
+               "log-ml:$PORT_LOG_ML" "searxng:$PORT_SEARXNG"; do
+    local name="${entry%%:*}" port="${entry##*:}"
+    if port_up "$port"; then printf "  ${c_ok}● UP  ${c_off} %-11s :%s\n" "$name" "$port"
+    else printf "  ${c_err}○ down${c_off} %-11s :%s\n" "$name" "$port"; fi
+  done
+  printf "\nOpen:  ${c_ok}http://localhost:%s${c_off} (dashboard)   logs: %s/\n\n" "$PORT_UI" "$LOG_DIR"
+}
+
+# ── Entrypoint ──────────────────────────────────────────────────────────────
+case "${1:-}" in
+  --stop)   stop_all ;;
+  --status) status_all ;;
+  --start)  check_prereqs; start_all ;;
+  ""|--all) check_prereqs; install_all; start_all ;;
+  *) die "unknown option '$1' (use: --start | --stop | --status | --all)" ;;
+esac

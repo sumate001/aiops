@@ -33,17 +33,31 @@ verify ผ่าน pipeline จริง: A2 OK ใน 265s, answer 2000 ตั
 **ถ้าจะเร่งให้เร็วขึ้น (อนาคต):** ย้าย Ollama ไปเครื่อง GPU, ตั้ง keep_alive กัน reload,
 หรือลด num_ctx (ตอนนี้ 32000 ใน Perplexica standalone JS)
 
-## 🔧 สิ่งที่ต้องทำตอน setup เครื่องใหม่
+## ✅ แก้เพิ่มเติม (callback path)
 
-1. รัน `setup.sh` → clone Perplexica จาก fork `sumate001/Vane` + `npm run build` + start SearXNG docker (port 4000)
-   - **ต้องใช้ Node >= 18 (แนะนำ 22)** — setup.sh เช็คให้แล้ว ถ้า Node เก่าจะ exit พร้อมแจ้งเตือน
-   - ✅ **Ollama patch อยู่ใน fork `sumate001/Vane` แล้ว** (commit 1e682a7) — build ออกมามี bypass ติดมาเลย **ไม่ต้อง re-apply เอง**
-2. สร้าง `config.yaml` (gitignored) — copy จากเครื่องเดิม หรือใช้ default จากโค้ด (e4b + timeout 480s แล้ว)
-3. Start services:
-   - log-ml: `cd aiops/log-ml && ~/.pyenv/versions/3.14.0/bin/uvicorn app.main:app --host 0.0.0.0 --port 3050`
-   - aiops backend: port 8200
-   - aiops frontend: port 3002 (Node 22)
-   - Perplexica: port 3001 (Node 22, `OLLAMA_BASE_URL=http://100.94.37.18:11434`, `SEARXNG_API_URL=http://localhost:4000`, `DATA_DIR=<repo>/perplexica-src`)
+- **logsim dashboard schema mismatch** — `AnalysisResultsPanel.tsx` อ่าน field ผิด
+  (`r.id`/`r.aa_synthesis`/hosts เป็น object) → แสดง UNKNOWN/Invalid Date/A2 ไม่โผล่
+  → เขียนใหม่ตาม AnalyzeResponse จริง (per-host synthesis + prediction + A2 enrichment)
+- **default callback port 8000 → 8071** (logsim backend) ใน `SimulationDrawer.tsx`
+- **`/ingest` 202 + background** — เดิม await pipeline เต็ม (รวม A2 ~7 นาที) ก่อนตอบ →
+  logsim timeout 180s รายงาน "0 lines sent". แก้: ถ้ามี `callback_url` รัน background +
+  ตอบ 202 ทันที ส่งผลทาง callback (`app/routers/ingest.py`)
+- **one-command deploy:** `bash deploy.sh` (install+start ทุก service) — ดู README
+
+## 🔧 setup เครื่องใหม่ — คำสั่งเดียว
+
+```bash
+git clone https://github.com/sumate001/aiops.git && cd aiops
+export OLLAMA_BASE_URL=http://100.94.37.18:11434   # remote ที่มี gemma4:e4b
+nvm use 22                                          # หรือ install ก่อน
+bash deploy.sh        # install + start ทุก service → http://localhost:3002
+```
+`deploy.sh` เช็ค prereq (Python/Node≥18/Docker), ติดตั้ง deps, clone+build Vane,
+start: SearXNG(4000) · log-ml(3050) · Perplexica(3001) · backend(8200) · frontend(3002)
+แล้วรอ health เอง · `--status` / `--start` / `--stop` ใช้คุมต่อได้
+
+- ✅ **Ollama patch อยู่ใน fork `sumate001/Vane` แล้ว** (commit 1e682a7) — build มาพร้อม bypass **ไม่ต้อง re-apply เอง**
+- `config.yaml` (gitignored) สร้างจาก example อัตโนมัติ (e4b + timeout 480s + perplexica enabled) — แก้ `ollama.base_url` ตามจริง
 
 ## หมายเหตุ environment
 

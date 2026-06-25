@@ -100,37 +100,59 @@ app/
 
 ## Quick Start
 
-### Local Development
+### 🚀 One-command deploy (recommended)
+
+ติดตั้ง + start ทุก service ด้วยคำสั่งเดียว — backend, log-ml (A1-IF), Perplexica/Vane,
+SearXNG (docker) และ frontend:
 
 ```bash
-# 1. log-analyzer backend
-cd log-analyzer
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+git clone https://github.com/sumate001/aiops.git && cd aiops
+
+# ชี้ไปยัง Ollama ที่มี model gemma4:e4b + nomic-embed-text (default = localhost)
+export OLLAMA_BASE_URL=http://100.x.x.x:11434     # remote/Tailscale หรือ localhost
+
+bash deploy.sh            # install (ครั้งแรก) + start ทุกอย่าง → เปิด http://localhost:3002
+```
+
+**Prerequisites:** Python 3.11+ (3.14 แนะนำ), **Node ≥ 18 (22 แนะนำ — `nvm use 22`)**, Docker (สำหรับ SearXNG)
+deploy.sh จะเช็คให้และหยุดพร้อมบอกวิธีแก้ถ้าขาด
+
+```bash
+bash deploy.sh --status   # ดูสถานะทุก service
+bash deploy.sh --start    # (re)start เฉย ๆ ข้าม install
+bash deploy.sh --stop     # หยุดทั้งหมด
+```
+
+logs อยู่ใน `logs/` · pidfiles ใน `.run/` · config อยู่ที่ `config.yaml`
+(สร้างจาก `config.yaml.example` อัตโนมัติครั้งแรก — แก้ `ollama.base_url` ตามจริง)
+
+> A2 Perplexica ช้าเมื่อ Ollama รันบน CPU (~10 tok/s) — timeout ตั้งไว้ 480s/host
+> `/ingest` ที่มี `callback_url` จะรันแบบ background แล้วตอบ 202 ทันที (ผลส่งกลับทาง callback)
+
+### Local Development (manual / alternative)
+
+```bash
+# 1. backend
+python3.14 -m pip install -r requirements.txt
 cp config.yaml.example config.yaml   # แก้ค่า ollama.base_url, callback_url ฯลฯ
 uvicorn app.main:app --port 8200     # http://localhost:8200
 
-# 2. log-analyzer frontend (UI)
-cd log-analyzer/frontend
-npm install
-node node_modules/.bin/next dev --webpack -p 3100   # http://localhost:3100
+# 2. frontend (UI)
+cd frontend && npm install && PORT=3002 npm run dev   # http://localhost:3002
 
 # 3. log-ml (Isolation Forest)
-cd log-ml
-python3.11 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --port 3050    # http://localhost:3050
+uvicorn app.main:app --app-dir log-ml --port 3050     # http://localhost:3050
 
-# 4. Perplexica (native — ต้องการ Node.js 22+)
-cd perplexica-src
-DATA_DIR=. node node_modules/.bin/next start -p 3001
+# 4. Perplexica / Vane (native — Node.js 22+)
+git clone https://github.com/sumate001/Vane perplexica-src
+cd perplexica-src && npm install && npm run build
+cd .next/standalone
+PORT=3001 SEARXNG_API_URL=http://localhost:4000 \
+  OLLAMA_BASE_URL=http://localhost:11434 DATA_DIR=$(pwd)/../.. node server.js
 
-# 5. Prometheus + Grafana (brew)
-brew install prometheus grafana && brew services start grafana
-prometheus --config.file=prometheus/prometheus.yml --web.listen-address=":9090"
-# Import grafana/provisioning/dashboards/godeyes.json
-# http://localhost:3003 (admin/godeyes)
+# 5. SearXNG (docker)
+docker run -d --name aiops-searxng -p 4000:8080 \
+  -e SEARXNG_SECRET="$(openssl rand -hex 32)" searxng/searxng:latest
 ```
 
 ### Docker Compose (Full Stack)
