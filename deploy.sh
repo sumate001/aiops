@@ -65,7 +65,7 @@ check_prereqs() {
   [ -n "$PYTHON" ] && command -v "$PYTHON" >/dev/null || die "python not found (need 3.11+; 3.14 recommended)"
   command -v node >/dev/null || die "node not found — install Node 22 (nvm install 22 && nvm use 22)"
   local nmaj; nmaj="$(node -v | sed -E 's/^v([0-9]+).*/\1/')"
-  [ "$nmaj" -ge 18 ] || die "Node $nmaj too old — Vane build needs >=18 (run 'nvm use 22')"
+  [ "$nmaj" -ge 20 ] || die "Node $nmaj too old — Vane/Next.js 16 needs >=20.9 (run: nvm install 22 && nvm use 22)"
   command -v docker >/dev/null || die "docker not found — required for SearXNG"
   docker info >/dev/null 2>&1 || die "docker daemon not running — start Docker Desktop first"
   ok "prereqs OK — $("$PYTHON" --version 2>&1), node $(node -v), docker present"
@@ -86,7 +86,7 @@ install_all() {
   log "[2/4] Perplexica (Vane) — clone + build (Node $(node -v))"
   if [ ! -d perplexica-src ]; then
     git clone https://github.com/sumate001/Vane perplexica-src
-    ( cd perplexica-src && npm install --legacy-peer-deps && npm run build )
+    ( cd perplexica-src && npm install --legacy-peer-deps --engine-strict=false && npm run build )
   else
     ok "perplexica-src exists — skipping clone/build (delete it to rebuild)"
   fi
