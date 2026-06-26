@@ -86,7 +86,7 @@ install_all() {
   log "[2/4] Perplexica (Vane) — clone + build (Node $(node -v))"
   if [ ! -d perplexica-src ]; then
     git clone https://github.com/sumate001/Vane perplexica-src
-    ( cd perplexica-src && npm install && npm run build )
+    ( cd perplexica-src && npm install --legacy-peer-deps && npm run build )
   else
     ok "perplexica-src exists — skipping clone/build (delete it to rebuild)"
   fi
