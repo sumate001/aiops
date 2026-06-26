@@ -26,7 +26,10 @@ OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434}"
 
 LOG_DIR="$SCRIPT_DIR/logs"
 RUN_DIR="$SCRIPT_DIR/.run"
+VENV="$SCRIPT_DIR/.venv"
 PYTHON="${PYTHON:-$(command -v python3.14 || command -v python3 || true)}"
+# Use venv python if already set up (subsequent --start / --status runs)
+[[ -x "$VENV/bin/python" ]] && PYTHON="$VENV/bin/python"
 
 mkdir -p "$LOG_DIR" "$RUN_DIR"
 
@@ -71,8 +74,14 @@ check_prereqs() {
 # ── Install ─────────────────────────────────────────────────────────────────
 install_all() {
   log "[1/4] Python dependencies (backend + log-ml)"
-  "$PYTHON" -m pip install -q -r requirements.txt
-  [ -f log-ml/requirements.txt ] && "$PYTHON" -m pip install -q -r log-ml/requirements.txt
+  if [[ ! -x "$VENV/bin/python" ]]; then
+    "$PYTHON" -m venv "$VENV"
+    log "  created virtualenv at $VENV"
+  fi
+  PYTHON="$VENV/bin/python"
+  "$VENV/bin/pip" install -q --upgrade pip
+  "$VENV/bin/pip" install -q -r requirements.txt
+  [ -f log-ml/requirements.txt ] && "$VENV/bin/pip" install -q -r log-ml/requirements.txt
 
   log "[2/4] Perplexica (Vane) — clone + build (Node $(node -v))"
   if [ ! -d perplexica-src ]; then
