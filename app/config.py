@@ -45,6 +45,22 @@ class OllamaConfig(BaseModel):
     temperature: float = 0.1
 
 
+class LLMConfig(BaseModel):
+    """Provider-agnostic LLM gateway used by the AI-judge enrichment paths
+    (A1 analyze, MiroFish, AA Synthesizer). `provider` is one of the ids in
+    app.services.llm_providers; for OpenAI-compatible providers `api_key` is
+    sent as a Bearer token. Defaults mirror the Ollama config for backward
+    compatibility (provider == "ollama" → native /api/generate)."""
+
+    enabled: bool = False
+    provider: str = "ollama"
+    base_url: str = "http://localhost:11434"
+    model: str = "gemma4:e4b"
+    api_key: str | None = None
+    timeout: str = "120s"
+    temperature: float = 0.1
+
+
 class HealthScoreConfig(BaseModel):
     critical_weight: float = 2.0
     warn_weight: float = 1.0
@@ -66,6 +82,7 @@ class AppConfig(BaseModel):
     godeye: GodEyeConfig = GodEyeConfig()
     perplexica: PerplexicaConfig = PerplexicaConfig()
     ollama: OllamaConfig = OllamaConfig()
+    llm: LLMConfig = LLMConfig()
     analysis: AnalysisConfig = AnalysisConfig()
 
 
@@ -96,6 +113,16 @@ def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
         cfg.perplexica.enabled = v.lower() not in ("0", "false", "no")
     if v := env.get("PERPLEXICA_CHAT_MODEL"):
         cfg.perplexica.chat_model = v
+    if v := env.get("LLM_ENABLED"):
+        cfg.llm.enabled = v.lower() not in ("0", "false", "no")
+    if v := env.get("LLM_PROVIDER"):
+        cfg.llm.provider = v
+    if v := env.get("LLM_BASE_URL"):
+        cfg.llm.base_url = v
+    if v := env.get("LLM_MODEL"):
+        cfg.llm.model = v
+    if v := env.get("LLM_API_KEY"):
+        cfg.llm.api_key = v
     if v := env.get("CALLBACK_URL"):
         cfg.godeye.callback_url = v
     if v := env.get("CALLBACK_ENABLED"):
@@ -115,6 +142,7 @@ def load_config() -> AppConfig:
 config = load_config()
 
 OLLAMA_TIMEOUT = _parse_timeout(config.ollama.timeout)
+LLM_TIMEOUT = _parse_timeout(config.llm.timeout)
 AIOPS_ML_TIMEOUT = _parse_timeout(config.aiops_ml.timeout)
 LOG_ML_TIMEOUT = _parse_timeout(config.log_ml.timeout)
 PERPLEXICA_TIMEOUT = _parse_timeout(config.perplexica.timeout)

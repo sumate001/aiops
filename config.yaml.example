@@ -32,6 +32,20 @@ ollama:
   timeout: "120s"
   temperature: 0.1            # ต่ำ = consistent, factual
 
+# AI judge gateway (MiroFish + AA Synthesizer enrichment).
+# provider: "ollama" ใช้ native /api/generate; provider อื่น = OpenAI-compatible
+# (groq, cerebras, gemini, openrouter, mistral, cohere, sambanova, nvidia,
+#  github, siliconflow, llm7, ovhcloud — ดู app/services/llm_providers.py)
+# ดูรายชื่อ free APIs: https://github.com/mnfst/awesome-free-llm-apis
+llm:
+  enabled: false                       # เปิดเพื่อให้ LLM enrich (ปิด = rule-based เท่านั้น)
+  provider: "ollama"                   # หรือ groq / cerebras / gemini / openrouter ...
+  base_url: "http://localhost:11434"   # OpenAI-compat: เช่น https://api.groq.com/openai/v1
+  model: "gemma4:e4b"                  # เช่น llama-3.3-70b-versatile (groq)
+  api_key: null                        # หรือ set ผ่าน env (เช่น GROQ_API_KEY)
+  timeout: "120s"
+  temperature: 0.1
+
 analysis:
   max_log_entries: 500        # cap per request ป้องกัน OOM
   severity_filter: "warn"     # รับเฉพาะ warn ขึ้นไป (info = เยอะเกิน)

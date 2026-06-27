@@ -30,3 +30,4 @@ model_store/
 perplexica-src/
 logs/
 .run/
+backend.log

@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from fastapi import APIRouter, HTTPException
 
-from app.config import config, OLLAMA_TIMEOUT, AIOPS_ML_TIMEOUT, LOG_ML_TIMEOUT, PERPLEXICA_TIMEOUT
+from app.config import config, OLLAMA_TIMEOUT, LLM_TIMEOUT, AIOPS_ML_TIMEOUT, LOG_ML_TIMEOUT, PERPLEXICA_TIMEOUT
 from app.models.request import AnalyzeRequest, LogEntry
 from app.models.response import (
     AnalyzeResponse,
@@ -20,7 +20,7 @@ from app.models.response import (
     TopError,
 )
 from app.services import aiops_ml as ml_client
-from app.services import ollama as ollama_client
+from app.services import llm as llm_client
 from app.services import log_ml_client
 from app.services import mirofish
 from app.services import synthesizer
@@ -186,7 +186,12 @@ async def _phase2_a3(st: _HostState) -> None:
         health_score=st.health_score,
         signal_counts=st.sig,
         top_error_msgs=st.top_error_msgs,
-        use_llm=False,
+        use_llm=config.llm.enabled,
+        ollama_generate=llm_client.generate,
+        model=config.llm.model,
+        base_url=config.llm.base_url,
+        timeout=LLM_TIMEOUT,
+        temperature=config.llm.temperature,
     )
     logger.info("A3 done — host=%s frames=%d", st.hostname, len(st.mirofish_frames))
 
@@ -198,7 +203,12 @@ async def _phase3_aa(st: _HostState) -> None:
         health_score=st.health_score,
         anomalies=[a.model_dump() for a in st.anomalies],
         mirofish_frames=st.mirofish_frames,
-        use_llm=False,
+        use_llm=config.llm.enabled,
+        ollama_generate=llm_client.generate,
+        model=config.llm.model,
+        base_url=config.llm.base_url,
+        timeout=LLM_TIMEOUT,
+        temperature=config.llm.temperature,
     )
     logger.info("AA done — host=%s top_frame=%s confidence=%.2f",
                 st.hostname, st.synth_result.top_frame, st.synth_result.confidence)
@@ -254,6 +264,10 @@ def _build_host_analysis(st: _HostState) -> tuple[HostAnalysis, bool]:
         root_cause_chain=[], confidence=0.0, fix_steps=[], method="rule",
         top_frame=None, top_frame_lens=None, anomaly_methods=[],
     )
+
+    # "ollama_used" really means "the LLM judge ran" — true when the synthesizer
+    # produced an LLM-method result (works for any provider, not just Ollama).
+    st.ollama_used = bool(sr and sr.method == "llm")
 
     return HostAnalysis(
         host=st.hostname,
@@ -364,7 +378,7 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         sources=Sources(
             aiops_ml_used=aiops_ml_used,
             ollama_used=any_ollama_used,
-            ollama_model=config.ollama.model,
+            ollama_model=config.llm.model if config.llm.enabled else config.ollama.model,
         ),
     )
 

@@ -166,8 +166,11 @@ install_all() {
     cp perplexica-src/data/config.json.example perplexica-src/data/config.json
   fi
 
-  log "[3/4] Frontend dependencies"
+  log "[3/4] Frontend dependencies + production build"
   [ -d frontend/node_modules ] || ( cd frontend && npm install )
+  # Build for production so the UI runs via `next start` (stable, no dev HMR /
+  # recompile loops, no allowedDevOrigins host restriction on remote machines).
+  ( cd frontend && npm run build )
 
   log "[4/4] config.yaml"
   if [ ! -f config.yaml ] && [ -f config.yaml.example ]; then
@@ -204,8 +207,11 @@ start_all() {
   start_svc backend "$PORT_BACKEND" backend.log \
     "$PYTHON" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT_BACKEND"
 
+  # Production server (next start). Rebuild first if there's no build output yet
+  # (e.g. after a fresh `--start` without a prior install).
+  [ -d frontend/.next ] || ( cd frontend && npm run build )
   start_svc frontend "$PORT_UI" frontend.log \
-    env PORT="$PORT_UI" npm --prefix frontend run dev
+    env PORT="$PORT_UI" npm --prefix frontend run start
 
   log "waiting for services…"
   wait_health "http://localhost:$PORT_LOG_ML/healthz"        "log-ml"

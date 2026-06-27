@@ -26,6 +26,11 @@ class ConfigUpdate(BaseModel):
     perplexica_embedding_model: str = "nomic-embed-text:latest"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "gemma4:e4b"
+    llm_enabled: bool = False
+    llm_provider: str = "ollama"
+    llm_base_url: str = "http://localhost:11434"
+    llm_model: str = "gemma4:e4b"
+    llm_api_key: str | None = None
 
 
 @router.get("/config")
@@ -56,7 +61,37 @@ async def get_config() -> dict:
             "base_url": config.aiops_ml.base_url,
             "enabled": config.aiops_ml.enabled,
         },
+        "llm": {
+            "enabled": config.llm.enabled,
+            "provider": config.llm.provider,
+            "base_url": config.llm.base_url,
+            "model": config.llm.model,
+            # never echo the secret back to the browser; just whether one is set
+            "has_api_key": bool(config.llm.api_key),
+        },
     }
+
+
+@router.get("/llm/providers")
+async def list_llm_providers() -> dict:
+    """Registry of supported free / OpenAI-compatible LLM providers (for the UI)."""
+    from app.services.llm_providers import PROVIDERS
+    return {"providers": [p.model_dump() for p in PROVIDERS]}
+
+
+@router.get("/llm/models")
+async def list_llm_models(
+    provider: str, base_url: str, api_key: str | None = None
+) -> dict:
+    """List models for any provider via its OpenAI-compatible /models route
+    (or Ollama /api/tags). Lets the settings page populate the model dropdown."""
+    from app.services import llm
+    try:
+        models = await llm.list_models(provider, base_url, api_key)
+        return {"models": models}
+    except Exception as exc:
+        logger.warning("Failed to list models for %s @ %s: %s", provider, base_url, exc)
+        return {"models": [], "error": str(exc)}
 
 
 @router.get("/ollama/models")
@@ -109,6 +144,16 @@ async def update_config(body: ConfigUpdate) -> dict:
         data["ollama"]["base_url"] = body.ollama_base_url
         data["ollama"]["model"] = body.ollama_model
 
+        data.setdefault("llm", {})
+        data["llm"]["enabled"] = body.llm_enabled
+        data["llm"]["provider"] = body.llm_provider
+        data["llm"]["base_url"] = body.llm_base_url
+        data["llm"]["model"] = body.llm_model
+        # Only overwrite the key when the UI actually sends one — an empty/None
+        # field means "leave the stored key as-is" so re-saving doesn't wipe it.
+        if body.llm_api_key:
+            data["llm"]["api_key"] = body.llm_api_key
+
         with open("config.yaml", "w") as f:
             yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
 
@@ -122,6 +167,12 @@ async def update_config(body: ConfigUpdate) -> dict:
         os.environ["PERPLEXICA_BASE_URL"] = body.perplexica_base_url
         os.environ["PERPLEXICA_ENABLED"] = "true" if body.perplexica_enabled else "false"
         os.environ["PERPLEXICA_CHAT_MODEL"] = body.perplexica_chat_model
+        os.environ["LLM_ENABLED"] = "true" if body.llm_enabled else "false"
+        os.environ["LLM_PROVIDER"] = body.llm_provider
+        os.environ["LLM_BASE_URL"] = body.llm_base_url
+        os.environ["LLM_MODEL"] = body.llm_model
+        if body.llm_api_key:
+            os.environ["LLM_API_KEY"] = body.llm_api_key
         os.environ["CALLBACK_ENABLED"] = "true" if body.godeye_enabled else "false"
         if body.godeye_callback_url:
             os.environ["CALLBACK_URL"] = body.godeye_callback_url
