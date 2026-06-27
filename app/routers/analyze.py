@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from functools import partial
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 
@@ -181,15 +182,16 @@ async def _phase1_a1(st: _HostState) -> None:
 
 # ── Phase 2: A3 — MiroFish 5-frame (no LLM, run all hosts in parallel) ──
 async def _phase2_a3(st: _HostState) -> None:
+    mf = config.llm.resolve("mirofish")
     st.mirofish_frames = await mirofish.analyze(
         host=st.hostname,
         health_score=st.health_score,
         signal_counts=st.sig,
         top_error_msgs=st.top_error_msgs,
         use_llm=config.llm.enabled,
-        ollama_generate=llm_client.generate,
-        model=config.llm.model,
-        base_url=config.llm.base_url,
+        ollama_generate=partial(llm_client.generate, provider=mf.provider, api_key=mf.api_key),
+        model=mf.model,
+        base_url=mf.base_url,
         timeout=LLM_TIMEOUT,
         temperature=config.llm.temperature,
     )
@@ -198,15 +200,16 @@ async def _phase2_a3(st: _HostState) -> None:
 
 # ── Phase 3: AA Synthesizer (fast, rule-based, run all hosts in parallel) ──
 async def _phase3_aa(st: _HostState) -> None:
+    sy = config.llm.resolve("synthesizer")
     st.synth_result = await synthesizer.synthesize(
         host=st.hostname,
         health_score=st.health_score,
         anomalies=[a.model_dump() for a in st.anomalies],
         mirofish_frames=st.mirofish_frames,
         use_llm=config.llm.enabled,
-        ollama_generate=llm_client.generate,
-        model=config.llm.model,
-        base_url=config.llm.base_url,
+        ollama_generate=partial(llm_client.generate, provider=sy.provider, api_key=sy.api_key),
+        model=sy.model,
+        base_url=sy.base_url,
         timeout=LLM_TIMEOUT,
         temperature=config.llm.temperature,
     )
@@ -230,12 +233,18 @@ async def _phase4_a2(st: _HostState) -> None:
     )
     logger.info("A2 start — host=%s query=%s", st.hostname, query[:80])
 
+    # Chat provider/model follow the resolved AI-judge stage (global default, or
+    # the Perplexica override). Embeddings stay on Perplexica's own Ollama model.
+    px = config.llm.resolve("perplexica")
     perp_result = await perplexica_client.search(
         query=query,
         base_url=config.perplexica.base_url,
-        chat_model=config.perplexica.chat_model,
+        chat_model=px.model,
         embedding_model=config.perplexica.embedding_model,
         timeout=PERPLEXICA_TIMEOUT,
+        chat_provider=px.provider,
+        chat_base_url=px.base_url,
+        chat_api_key=px.api_key,
     )
     if perp_result:
         st.enrichment = PerplexicaEnrichment(

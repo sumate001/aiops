@@ -1,13 +1,31 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
+type StageCfg = {
+  override?: boolean;
+  enabled?: boolean;
+  provider: string;
+  base_url: string;
+  model: string;
+  api_key?: string;
+  has_api_key?: boolean;
+};
+
 type ConfigData = {
   godeye: { callback_url: string | null; enabled: boolean };
   log_ml: { base_url: string; enabled: boolean };
   perplexica: { base_url: string; enabled: boolean; chat_model: string; embedding_model: string };
-  ollama: { base_url: string; model: string; timeout: string; temperature: number };
   aiops_ml: { base_url: string; enabled: boolean };
-  llm: { enabled: boolean; provider: string; base_url: string; model: string; has_api_key: boolean };
+  llm: {
+    enabled: boolean;
+    provider: string;
+    base_url: string;
+    model: string;
+    has_api_key: boolean;
+    mirofish: StageCfg;
+    synthesizer: StageCfg;
+    perplexica: StageCfg;
+  };
 };
 
 type LlmProvider = {
@@ -21,10 +39,40 @@ type LlmProvider = {
   notes: string;
 };
 
+type LlmForm = {
+  enabled: boolean;
+  provider: string;
+  base_url: string;
+  model: string;
+  api_key: string;
+  has_api_key: boolean;
+  mirofish: StageForm;
+  synthesizer: StageForm;
+  perplexica: StageForm;
+};
+type StageForm = {
+  override: boolean;
+  provider: string;
+  base_url: string;
+  model: string;
+  api_key: string;
+  has_api_key: boolean;
+};
+
+const emptyStage = (): StageForm => ({
+  override: false,
+  provider: "ollama",
+  base_url: "http://localhost:11434",
+  model: "gemma4:e4b",
+  api_key: "",
+  has_api_key: false,
+});
+
 export default function Settings() {
   const [cfg, setCfg] = useState<ConfigData | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [llmProviders, setLlmProviders] = useState<LlmProvider[]>([]);
 
   const [form, setForm] = useState({
     godeye_callback_url: "",
@@ -35,151 +83,19 @@ export default function Settings() {
     perplexica_base_url: "http://localhost:3001",
     perplexica_chat_model: "gemma4:e4b",
     perplexica_embedding_model: "nomic-embed-text:latest",
-    ollama_base_url: "http://localhost:11434",
-    ollama_model: "gemma4:e4b",
-    llm_enabled: false,
-    llm_provider: "ollama",
-    llm_base_url: "http://localhost:11434",
-    llm_model: "gemma4:e4b",
-    llm_api_key: "",
   });
 
-  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
-
-  const [ollamaModelsMsg, setOllamaModelsMsg] = useState<string | null>(null);
-
-  const [llmProviders, setLlmProviders] = useState<LlmProvider[]>([]);
-  const [llmModels, setLlmModels] = useState<string[]>([]);
-  const [llmModelsMsg, setLlmModelsMsg] = useState<string | null>(null);
-  const [llmHasKey, setLlmHasKey] = useState(false);
-
-  const fetchLlmModels = async (
-    provider: string,
-    baseUrl: string,
-    apiKey: string
-  ) => {
-    if (!baseUrl) return;
-    setLlmModelsMsg("Loading models…");
-    try {
-      const q = new URLSearchParams({ provider, base_url: baseUrl });
-      if (apiKey) q.set("api_key", apiKey);
-      const r = await fetch(`/api/llm/models?${q.toString()}`);
-      const d = await r.json();
-      const models: string[] = d.models ?? [];
-      setLlmModels(models);
-      setLlmModelsMsg(
-        models.length > 0 ? null : `No models${d.error ? ` (${d.error})` : ""}`
-      );
-    } catch {
-      setLlmModels([]);
-      setLlmModelsMsg(`Failed to reach ${baseUrl}`);
-    }
-  };
-
-  // When the user picks a provider, prefill base_url + default model from the registry.
-  const selectLlmProvider = (id: string) => {
-    const p = llmProviders.find((x) => x.id === id);
-    setForm((prev) => ({
-      ...prev,
-      llm_provider: id,
-      llm_base_url: p ? p.base_url : prev.llm_base_url,
-      llm_model: p ? p.default_model : prev.llm_model,
-    }));
-    setLlmModels([]);
-    setLlmModelsMsg(null);
-  };
-
-  const fetchOllamaModels = async (baseUrl: string) => {
-    if (!baseUrl) return;
-    setOllamaModelsMsg("Loading models…");
-    try {
-      // Ask the backend to probe the URL the user actually typed (not the
-      // static /ollama-proxy rewrite, which is pinned to one endpoint).
-      const r = await fetch(`/api/ollama/models?base_url=${encodeURIComponent(baseUrl)}`);
-      const d = await r.json();
-      const models: string[] = d.models ?? [];
-      setOllamaModels(models);
-      setOllamaModelsMsg(
-        models.length > 0 ? null : `No models found at ${baseUrl}${d.error ? ` (${d.error})` : ""}`
-      );
-    } catch (e) {
-      setOllamaModels([]);
-      setOllamaModelsMsg(`Failed to reach ${baseUrl}`);
-    }
-  };
-
-  const [perplexicaCfg, setPerplexicaCfg] = useState({
-    ollama_url: "http://host.docker.internal:11434",
-    chat_model: "",
-    embedding_model: "",
+  const [llm, setLlm] = useState<LlmForm>({
+    enabled: false,
+    provider: "ollama",
+    base_url: "http://localhost:11434",
+    model: "gemma4:e4b",
+    api_key: "",
+    has_api_key: false,
+    mirofish: emptyStage(),
+    synthesizer: emptyStage(),
+    perplexica: emptyStage(),
   });
-  const [perplexicaModels, setPerplexicaModels] = useState<string[]>([]);
-  // Models read straight from Perplexica's Ollama backend, so the dropdown works
-  // even when Perplexica's own /api/providers is unreachable.
-  const [perplexicaOllamaModels, setPerplexicaOllamaModels] = useState<string[]>([]);
-  const [perplexicaSaving, setPerplexicaSaving] = useState(false);
-  const [perplexicaMsg, setPerplexicaMsg] = useState<{ ok: boolean; text: string } | null>(null);
-
-  const fetchPerplexicaOllamaModels = async (baseUrl: string) => {
-    if (!baseUrl) return;
-    try {
-      const r = await fetch(`/api/ollama/models?base_url=${encodeURIComponent(baseUrl)}`);
-      const d = await r.json();
-      setPerplexicaOllamaModels(d.models ?? []);
-    } catch {
-      setPerplexicaOllamaModels([]);
-    }
-  };
-
-  const fetchPerplexicaConfig = async (_baseUrl: string, preserveUrl = false) => {
-    try {
-      // ดึง Ollama URL จาก /api/config
-      const cfgR = await fetch(`/perplexica/api/config`);
-      const cfg = await cfgR.json();
-      const ollamaCfg = cfg.values?.modelProviders?.find((p: any) => p.type === "ollama" || p.id === "ollama");
-      if (ollamaCfg?.config?.baseURL) {
-        // After an explicit Save, keep the URL the user just entered instead of
-        // bouncing back to whatever Perplexica still reports as stored.
-        if (!preserveUrl) {
-          setPerplexicaCfg((prev) => ({ ...prev, ollama_url: ollamaCfg.config.baseURL }));
-        }
-        fetchPerplexicaOllamaModels(preserveUrl ? perplexicaCfg.ollama_url : ollamaCfg.config.baseURL).catch(() => {});
-      }
-
-      // ดึง models จาก /api/providers (มี chatModels จริง)
-      const provR = await fetch(`/perplexica/api/providers`);
-      const prov = await provR.json();
-      const ollama = prov.providers?.find((p: any) => p.type === "ollama");
-      if (ollama) {
-        const models = ollama.chatModels
-          ?.filter((m: any) => m.key !== "error")
-          .map((m: any) => m.key) ?? [];
-        setPerplexicaModels(models);
-        if (models.length > 0) {
-          setPerplexicaCfg((prev) => ({ ...prev, chat_model: prev.chat_model || models[0] }));
-          setForm((prev) => ({ ...prev, perplexica_chat_model: prev.perplexica_chat_model || models[0] }));
-        }
-      }
-    } catch {}
-  };
-
-  const savePerplexicaConfig = async () => {
-    setPerplexicaSaving(true);
-    setPerplexicaMsg(null);
-    try {
-      await fetch(`/perplexica/api/providers/ollama`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config: { baseURL: perplexicaCfg.ollama_url } }),
-      });
-      await fetchPerplexicaConfig(form.perplexica_base_url, true);
-      await fetchPerplexicaOllamaModels(perplexicaCfg.ollama_url);
-      setPerplexicaMsg({ ok: true, text: "Perplexica Ollama URL updated. Models refreshed." });
-    } catch (e) {
-      setPerplexicaMsg({ ok: false, text: "Failed to update Perplexica — is it running at port 3001?" });
-    }
-    setPerplexicaSaving(false);
-  };
 
   useEffect(() => {
     fetch("/api/config")
@@ -195,17 +111,27 @@ export default function Settings() {
           perplexica_base_url: data.perplexica.base_url,
           perplexica_chat_model: data.perplexica.chat_model || "gemma4:e4b",
           perplexica_embedding_model: data.perplexica.embedding_model || "nomic-embed-text:latest",
-          ollama_base_url: data.ollama.base_url,
-          ollama_model: data.ollama.model,
-          llm_enabled: data.llm?.enabled ?? false,
-          llm_provider: data.llm?.provider ?? "ollama",
-          llm_base_url: data.llm?.base_url ?? "http://localhost:11434",
-          llm_model: data.llm?.model ?? "gemma4:e4b",
-          llm_api_key: "",
         });
-        setLlmHasKey(data.llm?.has_api_key ?? false);
-        fetchPerplexicaConfig(data.perplexica.base_url).catch(() => {});
-        fetchOllamaModels(data.ollama.base_url).catch(() => {});
+        const l = data.llm;
+        const stage = (s: StageCfg): StageForm => ({
+          override: !!s.override,
+          provider: s.provider,
+          base_url: s.base_url,
+          model: s.model,
+          api_key: "",
+          has_api_key: !!s.has_api_key,
+        });
+        setLlm({
+          enabled: l.enabled,
+          provider: l.provider,
+          base_url: l.base_url,
+          model: l.model,
+          api_key: "",
+          has_api_key: l.has_api_key,
+          mirofish: stage(l.mirofish),
+          synthesizer: stage(l.synthesizer),
+          perplexica: stage(l.perplexica),
+        });
       })
       .catch(() => setMsg({ ok: false, text: "Failed to load config from backend" }));
 
@@ -219,20 +145,34 @@ export default function Settings() {
     setSaving(true);
     setMsg(null);
     try {
+      const stageOut = (s: StageForm) => ({
+        override: s.override,
+        provider: s.provider,
+        base_url: s.base_url,
+        model: s.model,
+        api_key: s.api_key || null, // empty ⇒ backend keeps stored key
+      });
+      const body = {
+        ...form,
+        godeye_callback_url: form.godeye_callback_url || null,
+        llm: {
+          enabled: llm.enabled,
+          provider: llm.provider,
+          base_url: llm.base_url,
+          model: llm.model,
+          api_key: llm.api_key || null,
+          mirofish: stageOut(llm.mirofish),
+          synthesizer: stageOut(llm.synthesizer),
+          perplexica: stageOut(llm.perplexica),
+        },
+      };
       const r = await fetch("/api/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...form,
-          godeye_callback_url: form.godeye_callback_url || null,
-        }),
+        body: JSON.stringify(body),
       });
       const data = await r.json();
-      if (r.ok) {
-        setMsg({ ok: true, text: data.message ?? "Saved" });
-      } else {
-        setMsg({ ok: false, text: data.detail ?? "Save failed" });
-      }
+      setMsg(r.ok ? { ok: true, text: data.message ?? "Saved" } : { ok: false, text: data.detail ?? "Save failed" });
     } catch (e) {
       setMsg({ ok: false, text: String(e) });
     }
@@ -256,249 +196,82 @@ export default function Settings() {
       <div className="max-w-2xl space-y-6">
         {/* GodEye Callback */}
         <Section title="GodEye Callback">
-          <Toggle
-            label="Enabled"
-            checked={form.godeye_enabled}
-            onChange={(v) => setForm({ ...form, godeye_enabled: v })}
-          />
+          <Toggle label="Enabled" checked={form.godeye_enabled} onChange={(v) => setForm({ ...form, godeye_enabled: v })} />
           <Field
             label="Callback URL"
             placeholder="http://your-godeye-host/callback"
             value={form.godeye_callback_url}
             onChange={(v) => setForm({ ...form, godeye_callback_url: v })}
           />
-          <p className="text-xs text-gray-500 mt-1">
-            After each /ingest analysis, results will be POSTed as JSON to this URL.
-          </p>
+          <p className="text-xs text-gray-500 mt-1">After each /ingest analysis, results will be POSTed as JSON to this URL.</p>
         </Section>
 
         {/* Isolation Forest */}
         <Section title="A1 Isolation Forest (log-ml)">
-          <Toggle
-            label="Enabled"
-            checked={form.log_ml_enabled}
-            onChange={(v) => setForm({ ...form, log_ml_enabled: v })}
-          />
-          <Field
-            label="Base URL"
-            value={form.log_ml_base_url}
-            onChange={(v) => setForm({ ...form, log_ml_base_url: v })}
-          />
+          <Toggle label="Enabled" checked={form.log_ml_enabled} onChange={(v) => setForm({ ...form, log_ml_enabled: v })} />
+          <Field label="Base URL" value={form.log_ml_base_url} onChange={(v) => setForm({ ...form, log_ml_base_url: v })} />
         </Section>
 
-        {/* Perplexica */}
-        <Section title="A2 Perplexica (External Knowledge)">
+        {/* AI — default + per-stage */}
+        <Section title="AI (LLM) — used by MiroFish · Synthesizer · Perplexica">
           <Toggle
-            label="Enabled"
-            checked={form.perplexica_enabled}
-            onChange={(v) => setForm({ ...form, perplexica_enabled: v })}
+            label="Enable LLM enrichment"
+            checked={llm.enabled}
+            onChange={(v) => setLlm({ ...llm, enabled: v })}
           />
-          <Field
-            label="Perplexica Base URL"
-            value={form.perplexica_base_url}
-            onChange={(v) => setForm({ ...form, perplexica_base_url: v })}
-          />
-          <p className="text-xs text-gray-500">
-            Perplexica UI: <a href={form.perplexica_base_url} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">{form.perplexica_base_url}</a>
+          <p className="text-xs text-gray-500 -mt-1">
+            Set one <b>Default AI</b> below; every AI stage uses it unless you turn on its Override.
           </p>
 
-          {/* Perplexica Ollama Model Config */}
-          <div className="mt-4 border-t border-gray-700 pt-4 space-y-3">
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Perplexica → Ollama Model</p>
-            <Field
-              label="Ollama Base URL"
-              placeholder="http://localhost:11434"
-              value={perplexicaCfg.ollama_url}
-              onChange={(v) => setPerplexicaCfg({ ...perplexicaCfg, ollama_url: v })}
-              onBlur={(v) => fetchPerplexicaOllamaModels(v).catch(() => {})}
+          <div className="mt-2 border-t border-gray-700 pt-4">
+            <p className="text-xs font-semibold text-gray-300 uppercase tracking-wide mb-3">Default AI</p>
+            <LlmPicker
+              providers={llmProviders}
+              value={llm}
+              hasKey={llm.has_api_key}
+              onChange={(patch) => setLlm({ ...llm, ...patch })}
             />
-            {(() => {
-              const fromPerplexica = perplexicaModels.length > 0;
-              const models = fromPerplexica
-                ? perplexicaModels
-                : perplexicaOllamaModels.length > 0
-                ? perplexicaOllamaModels
-                : ollamaModels;
-              return models.length > 0 ? (
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">
-                    Chat Model {!fromPerplexica && <span className="text-yellow-500">(from Ollama direct)</span>}
-                  </label>
-                  <select
-                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
-                    value={form.perplexica_chat_model}
-                    onChange={(e) => setForm({ ...form, perplexica_chat_model: e.target.value })}
-                  >
-                    {models.map((m) => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                </div>
-              ) : (
-                <p className="text-xs text-gray-500">No models loaded — save Ollama URL then click Refresh</p>
-              );
-            })()}
-            {perplexicaMsg && (
-              <div className={`rounded-lg px-3 py-2 text-xs ${perplexicaMsg.ok ? "bg-green-900 text-green-300" : "bg-red-900 text-red-300"}`}>
-                {perplexicaMsg.text}
-              </div>
-            )}
-            <div className="flex gap-2">
-              <button
-                onClick={savePerplexicaConfig}
-                disabled={perplexicaSaving}
-                className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium px-4 py-1.5 rounded-lg transition-colors"
-              >
-                {perplexicaSaving ? "Saving..." : "Save & Refresh Models"}
-              </button>
-              <button
-                onClick={() => fetchPerplexicaConfig(form.perplexica_base_url).catch(() => {})}
-                className="bg-gray-700 hover:bg-gray-600 text-white text-xs font-medium px-4 py-1.5 rounded-lg transition-colors"
-              >
-                Refresh Models
-              </button>
-            </div>
           </div>
+
+          <StageOverride
+            title="MiroFish (A3)"
+            providers={llmProviders}
+            stage={llm.mirofish}
+            fallback={llm}
+            onChange={(s) => setLlm({ ...llm, mirofish: s })}
+          />
+          <StageOverride
+            title="Synthesizer (AA)"
+            providers={llmProviders}
+            stage={llm.synthesizer}
+            fallback={llm}
+            onChange={(s) => setLlm({ ...llm, synthesizer: s })}
+          />
+          <StageOverride
+            title="Perplexica (A2)"
+            providers={llmProviders}
+            stage={llm.perplexica}
+            fallback={llm}
+            onChange={(s) => setLlm({ ...llm, perplexica: s })}
+            note="Embeddings always stay on the local Ollama/Transformers model; this only switches the chat model."
+          />
         </Section>
 
-        {/* Ollama — log-analyzer (native process) */}
-        <Section title="Ollama LLM">
+        {/* Perplexica service */}
+        <Section title="A2 Perplexica (External Knowledge)">
+          <Toggle label="Enabled" checked={form.perplexica_enabled} onChange={(v) => setForm({ ...form, perplexica_enabled: v })} />
+          <Field label="Perplexica Base URL" value={form.perplexica_base_url} onChange={(v) => setForm({ ...form, perplexica_base_url: v })} />
           <Field
-            label="Base URL"
-            placeholder="http://localhost:11434"
-            value={form.ollama_base_url}
-            onChange={(v) => setForm({ ...form, ollama_base_url: v })}
-            onBlur={(v) => fetchOllamaModels(v).catch(() => {})}
+            label="Embedding Model (local)"
+            placeholder="nomic-embed-text:latest"
+            value={form.perplexica_embedding_model}
+            onChange={(v) => setForm({ ...form, perplexica_embedding_model: v })}
           />
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs text-gray-400">Model</label>
-              <button
-                type="button"
-                onClick={() => fetchOllamaModels(form.ollama_base_url).catch(() => {})}
-                className="text-xs text-blue-400 hover:text-blue-300"
-              >
-                ↻ Refresh models
-              </button>
-            </div>
-            {ollamaModelsMsg && <p className="text-xs text-yellow-500 mb-1">{ollamaModelsMsg}</p>}
-            {ollamaModels.length > 0 ? (
-              <select
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
-                value={form.ollama_model}
-                onChange={(e) => setForm({ ...form, ollama_model: e.target.value })}
-              >
-                {(form.ollama_model && !ollamaModels.includes(form.ollama_model)
-                  ? [form.ollama_model, ...ollamaModels]
-                  : ollamaModels
-                ).map((m) => <option key={m} value={m}>{m}</option>)}
-              </select>
-            ) : (
-              <input
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
-                value={form.ollama_model}
-                onChange={(e) => setForm({ ...form, ollama_model: e.target.value })}
-                placeholder="e.g. gemma4:12b"
-              />
-            )}
-          </div>
-          {cfg && (
-            <p className="text-xs text-gray-500 mt-1">
-              Temperature: {cfg.ollama.temperature} · Timeout: {cfg.ollama.timeout}
-            </p>
-          )}
+          <p className="text-xs text-gray-500">
+            Chat model/provider for A2 is controlled in the <b>AI (LLM)</b> section above (Perplexica stage).
+          </p>
         </Section>
 
-        {/* LLM Provider — AI judge (OpenAI-compatible / free APIs) */}
-        <Section title="AI Judge — LLM Provider">
-          <Toggle
-            label="Enable LLM enrichment (MiroFish + Synthesizer)"
-            checked={form.llm_enabled}
-            onChange={(v) => setForm({ ...form, llm_enabled: v })}
-          />
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Provider</label>
-            <select
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
-              value={form.llm_provider}
-              onChange={(e) => selectLlmProvider(e.target.value)}
-            >
-              {llmProviders.map((p) => (
-                <option key={p.id} value={p.id}>{p.label}</option>
-              ))}
-            </select>
-            {(() => {
-              const p = llmProviders.find((x) => x.id === form.llm_provider);
-              return p ? (
-                <p className="text-xs text-gray-500 mt-1">
-                  {p.rate_limit && <>Free tier: {p.rate_limit}. </>}
-                  {p.notes}
-                </p>
-              ) : null;
-            })()}
-          </div>
-          <Field
-            label="Base URL"
-            placeholder="https://api.groq.com/openai/v1"
-            value={form.llm_base_url}
-            onChange={(v) => setForm({ ...form, llm_base_url: v })}
-          />
-          {form.llm_provider !== "ollama" && (
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">
-                API Key{" "}
-                {llmHasKey && <span className="text-green-500">(saved — leave blank to keep)</span>}
-                {(() => {
-                  const p = llmProviders.find((x) => x.id === form.llm_provider);
-                  return p?.api_key_env ? (
-                    <span className="text-gray-500"> · env fallback: {p.api_key_env}</span>
-                  ) : null;
-                })()}
-              </label>
-              <input
-                type="password"
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
-                value={form.llm_api_key}
-                onChange={(e) => setForm({ ...form, llm_api_key: e.target.value })}
-                placeholder={llmHasKey ? "••••••••" : "sk-..."}
-              />
-            </div>
-          )}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs text-gray-400">Model</label>
-              <button
-                type="button"
-                onClick={() =>
-                  fetchLlmModels(form.llm_provider, form.llm_base_url, form.llm_api_key).catch(() => {})
-                }
-                className="text-xs text-blue-400 hover:text-blue-300"
-              >
-                ↻ Refresh models
-              </button>
-            </div>
-            {llmModelsMsg && <p className="text-xs text-yellow-500 mb-1">{llmModelsMsg}</p>}
-            {llmModels.length > 0 ? (
-              <select
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
-                value={form.llm_model}
-                onChange={(e) => setForm({ ...form, llm_model: e.target.value })}
-              >
-                {(form.llm_model && !llmModels.includes(form.llm_model)
-                  ? [form.llm_model, ...llmModels]
-                  : llmModels
-                ).map((m) => <option key={m} value={m}>{m}</option>)}
-              </select>
-            ) : (
-              <input
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
-                value={form.llm_model}
-                onChange={(e) => setForm({ ...form, llm_model: e.target.value })}
-                placeholder="e.g. llama-3.3-70b-versatile"
-              />
-            )}
-          </div>
-        </Section>
-
-        {/* Read-only info */}
         {cfg && (
           <Section title="aiops-ml (read-only)">
             <div className="text-xs text-gray-400 space-y-1">
@@ -522,6 +295,143 @@ export default function Settings() {
           {saving ? "Saving..." : "Save Settings"}
         </button>
       </div>
+    </div>
+  );
+}
+
+// ── Reusable LLM provider/model picker ─────────────────────────────────────
+function LlmPicker({
+  providers,
+  value,
+  hasKey,
+  onChange,
+}: {
+  providers: LlmProvider[];
+  value: { provider: string; base_url: string; model: string; api_key: string };
+  hasKey: boolean;
+  onChange: (patch: Partial<{ provider: string; base_url: string; model: string; api_key: string }>) => void;
+}) {
+  const [models, setModels] = useState<string[]>([]);
+  const [modelsMsg, setModelsMsg] = useState<string | null>(null);
+
+  const fetchModels = async () => {
+    if (!value.base_url) return;
+    setModelsMsg("Loading models…");
+    try {
+      const q = new URLSearchParams({ provider: value.provider, base_url: value.base_url });
+      if (value.api_key) q.set("api_key", value.api_key);
+      const r = await fetch(`/api/llm/models?${q.toString()}`);
+      const d = await r.json();
+      const m: string[] = d.models ?? [];
+      setModels(m);
+      setModelsMsg(m.length ? null : `No models${d.error ? ` (${d.error})` : ""}`);
+    } catch {
+      setModels([]);
+      setModelsMsg("Failed to reach endpoint");
+    }
+  };
+
+  const selectProvider = (id: string) => {
+    const p = providers.find((x) => x.id === id);
+    onChange({ provider: id, base_url: p ? p.base_url : value.base_url, model: p ? p.default_model : value.model });
+    setModels([]);
+    setModelsMsg(null);
+  };
+
+  const info = providers.find((x) => x.id === value.provider);
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="block text-xs text-gray-400 mb-1">Provider</label>
+        <select
+          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+          value={value.provider}
+          onChange={(e) => selectProvider(e.target.value)}
+        >
+          {providers.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+        </select>
+        {info && (
+          <p className="text-xs text-gray-500 mt-1">{info.rate_limit && <>Free tier: {info.rate_limit}. </>}{info.notes}</p>
+        )}
+      </div>
+      <Field label="Base URL" value={value.base_url} onChange={(v) => onChange({ base_url: v })} />
+      {value.provider !== "ollama" && (
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">
+            API Key {hasKey && <span className="text-green-500">(saved — leave blank to keep)</span>}
+            {info?.api_key_env && <span className="text-gray-500"> · env: {info.api_key_env}</span>}
+          </label>
+          <input
+            type="password"
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+            value={value.api_key}
+            onChange={(e) => onChange({ api_key: e.target.value })}
+            placeholder={hasKey ? "••••••••" : "sk-..."}
+          />
+        </div>
+      )}
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <label className="block text-xs text-gray-400">Model</label>
+          <button type="button" onClick={() => fetchModels()} className="text-xs text-blue-400 hover:text-blue-300">↻ Refresh models</button>
+        </div>
+        {modelsMsg && <p className="text-xs text-yellow-500 mb-1">{modelsMsg}</p>}
+        {models.length > 0 ? (
+          <select
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+            value={value.model}
+            onChange={(e) => onChange({ model: e.target.value })}
+          >
+            {(value.model && !models.includes(value.model) ? [value.model, ...models] : models).map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        ) : (
+          <input
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+            value={value.model}
+            onChange={(e) => onChange({ model: e.target.value })}
+            placeholder="e.g. llama-3.3-70b-versatile"
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Per-stage override panel ───────────────────────────────────────────────
+function StageOverride({
+  title,
+  providers,
+  stage,
+  fallback,
+  onChange,
+  note,
+}: {
+  title: string;
+  providers: LlmProvider[];
+  stage: StageForm;
+  fallback: { provider: string; model: string };
+  onChange: (s: StageForm) => void;
+  note?: string;
+}) {
+  return (
+    <div className="mt-2 border-t border-gray-700 pt-4">
+      <Toggle label={`${title} — override`} checked={stage.override} onChange={(v) => onChange({ ...stage, override: v })} />
+      {note && <p className="text-xs text-gray-500 mt-1">{note}</p>}
+      {!stage.override ? (
+        <p className="text-xs text-gray-500 mt-1">Using Default AI ({fallback.provider} · {fallback.model})</p>
+      ) : (
+        <div className="mt-3">
+          <LlmPicker
+            providers={providers}
+            value={stage}
+            hasKey={stage.has_api_key}
+            onChange={(patch) => onChange({ ...stage, ...patch })}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -562,15 +472,7 @@ function Field({
   );
 }
 
-function Toggle({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-}) {
+function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <div className="flex items-center gap-3">
       <button

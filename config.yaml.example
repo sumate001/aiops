@@ -39,12 +39,18 @@ ollama:
 # ดูรายชื่อ free APIs: https://github.com/mnfst/awesome-free-llm-apis
 llm:
   enabled: false                       # เปิดเพื่อให้ LLM enrich (ปิด = rule-based เท่านั้น)
+  # ── Default AI: ทุก stage ใช้ค่านี้ ถ้าไม่เปิด override ของ stage นั้น ──
   provider: "ollama"                   # หรือ groq / cerebras / gemini / openrouter ...
   base_url: "http://localhost:11434"   # OpenAI-compat: เช่น https://api.groq.com/openai/v1
   model: "gemma4:e4b"                  # เช่น llama-3.3-70b-versatile (groq)
   api_key: null                        # หรือ set ผ่าน env (เช่น GROQ_API_KEY)
   timeout: "120s"
   temperature: 0.1
+  # ── Per-stage override: ตั้ง override: true เพื่อใช้ provider/model ต่างจาก default ──
+  mirofish:    { override: false, provider: "ollama", base_url: "http://localhost:11434", model: "gemma4:e4b", api_key: null }
+  synthesizer: { override: false, provider: "ollama", base_url: "http://localhost:11434", model: "gemma4:e4b", api_key: null }
+  # perplexica: เปลี่ยนเฉพาะ chat model ของ A2 (embedding ยังใช้ ollama/transformers ในเครื่อง)
+  perplexica:  { override: false, provider: "ollama", base_url: "http://localhost:11434", model: "gemma4:e4b", api_key: null }
 
 analysis:
   max_log_entries: 500        # cap per request ป้องกัน OOM

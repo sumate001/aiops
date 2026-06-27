@@ -193,6 +193,12 @@ start_all() {
     log "creating SearXNG container on :$PORT_SEARXNG"
     $DOCKER run -d --name aiops-searxng -p "${PORT_SEARXNG}:8080" \
       -e SEARXNG_SECRET="$(openssl rand -hex 32)" searxng/searxng:latest >/dev/null
+    # Perplexica queries SearXNG with format=json, which the default settings
+    # disable (→ 403, zero sources). Enable it, then restart to apply.
+    sleep 4
+    $DOCKER exec aiops-searxng sh -c \
+      "grep -q '^search:' /etc/searxng/settings.yml || printf '\nsearch:\n  formats:\n    - html\n    - json\n' >> /etc/searxng/settings.yml" \
+      && $DOCKER restart aiops-searxng >/dev/null && ok "SearXNG json format enabled"
   fi
 
   start_svc log-ml "$PORT_LOG_ML" log-ml.log \

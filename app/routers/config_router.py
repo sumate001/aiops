@@ -15,6 +15,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 
+class StageUpdate(BaseModel):
+    override: bool = False
+    provider: str = "ollama"
+    base_url: str = "http://localhost:11434"
+    model: str = "gemma4:e4b"
+    api_key: str | None = None  # empty/None ⇒ keep stored key
+
+
+class LLMUpdate(BaseModel):
+    enabled: bool = False
+    provider: str = "ollama"
+    base_url: str = "http://localhost:11434"
+    model: str = "gemma4:e4b"
+    api_key: str | None = None  # empty/None ⇒ keep stored key
+    mirofish: StageUpdate = StageUpdate()
+    synthesizer: StageUpdate = StageUpdate()
+    perplexica: StageUpdate = StageUpdate()
+
+
 class ConfigUpdate(BaseModel):
     godeye_callback_url: str | None = None
     godeye_enabled: bool = True
@@ -24,13 +43,7 @@ class ConfigUpdate(BaseModel):
     perplexica_base_url: str = "http://localhost:3001"
     perplexica_chat_model: str = "gemma4:e4b"
     perplexica_embedding_model: str = "nomic-embed-text:latest"
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "gemma4:e4b"
-    llm_enabled: bool = False
-    llm_provider: str = "ollama"
-    llm_base_url: str = "http://localhost:11434"
-    llm_model: str = "gemma4:e4b"
-    llm_api_key: str | None = None
+    llm: LLMUpdate = LLMUpdate()
 
 
 @router.get("/config")
@@ -51,12 +64,6 @@ async def get_config() -> dict:
             "chat_model": config.perplexica.chat_model,
             "embedding_model": config.perplexica.embedding_model,
         },
-        "ollama": {
-            "base_url": config.ollama.base_url,
-            "model": config.ollama.model,
-            "timeout": config.ollama.timeout,
-            "temperature": config.ollama.temperature,
-        },
         "aiops_ml": {
             "base_url": config.aiops_ml.base_url,
             "enabled": config.aiops_ml.enabled,
@@ -68,7 +75,20 @@ async def get_config() -> dict:
             "model": config.llm.model,
             # never echo the secret back to the browser; just whether one is set
             "has_api_key": bool(config.llm.api_key),
+            "mirofish": _stage_dict(config.llm.mirofish),
+            "synthesizer": _stage_dict(config.llm.synthesizer),
+            "perplexica": _stage_dict(config.llm.perplexica),
         },
+    }
+
+
+def _stage_dict(s) -> dict:
+    return {
+        "override": s.override,
+        "provider": s.provider,
+        "base_url": s.base_url,
+        "model": s.model,
+        "has_api_key": bool(s.api_key),
     }
 
 
@@ -140,19 +160,24 @@ async def update_config(body: ConfigUpdate) -> dict:
         data["perplexica"]["chat_model"] = body.perplexica_chat_model
         data["perplexica"]["embedding_model"] = body.perplexica_embedding_model
 
-        data.setdefault("ollama", {})
-        data["ollama"]["base_url"] = body.ollama_base_url
-        data["ollama"]["model"] = body.ollama_model
-
-        data.setdefault("llm", {})
-        data["llm"]["enabled"] = body.llm_enabled
-        data["llm"]["provider"] = body.llm_provider
-        data["llm"]["base_url"] = body.llm_base_url
-        data["llm"]["model"] = body.llm_model
-        # Only overwrite the key when the UI actually sends one — an empty/None
-        # field means "leave the stored key as-is" so re-saving doesn't wipe it.
-        if body.llm_api_key:
-            data["llm"]["api_key"] = body.llm_api_key
+        llm = data.setdefault("llm", {})
+        llm["enabled"] = body.llm.enabled
+        llm["provider"] = body.llm.provider
+        llm["base_url"] = body.llm.base_url
+        llm["model"] = body.llm.model
+        # Only overwrite a key when the UI actually sends one — an empty/None
+        # field means "keep the stored key" so re-saving doesn't wipe it.
+        if body.llm.api_key:
+            llm["api_key"] = body.llm.api_key
+        for stage in ("mirofish", "synthesizer", "perplexica"):
+            su = getattr(body.llm, stage)
+            block = llm.setdefault(stage, {})
+            block["override"] = su.override
+            block["provider"] = su.provider
+            block["base_url"] = su.base_url
+            block["model"] = su.model
+            if su.api_key:
+                block["api_key"] = su.api_key
 
         with open("config.yaml", "w") as f:
             yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
@@ -160,19 +185,17 @@ async def update_config(body: ConfigUpdate) -> dict:
         # Sync the env vars that _apply_env_overrides honours, otherwise a stale
         # OLLAMA_BASE_URL/etc in the process env would clobber what we just saved
         # on the next load_config() — making the UI look like "save didn't stick".
-        os.environ["OLLAMA_BASE_URL"] = body.ollama_base_url
-        os.environ["OLLAMA_MODEL"] = body.ollama_model
         os.environ["LOG_ML_BASE_URL"] = body.log_ml_base_url
         os.environ["LOG_ML_ENABLED"] = "true" if body.log_ml_enabled else "false"
         os.environ["PERPLEXICA_BASE_URL"] = body.perplexica_base_url
         os.environ["PERPLEXICA_ENABLED"] = "true" if body.perplexica_enabled else "false"
         os.environ["PERPLEXICA_CHAT_MODEL"] = body.perplexica_chat_model
-        os.environ["LLM_ENABLED"] = "true" if body.llm_enabled else "false"
-        os.environ["LLM_PROVIDER"] = body.llm_provider
-        os.environ["LLM_BASE_URL"] = body.llm_base_url
-        os.environ["LLM_MODEL"] = body.llm_model
-        if body.llm_api_key:
-            os.environ["LLM_API_KEY"] = body.llm_api_key
+        os.environ["LLM_ENABLED"] = "true" if body.llm.enabled else "false"
+        os.environ["LLM_PROVIDER"] = body.llm.provider
+        os.environ["LLM_BASE_URL"] = body.llm.base_url
+        os.environ["LLM_MODEL"] = body.llm.model
+        if body.llm.api_key:
+            os.environ["LLM_API_KEY"] = body.llm.api_key
         os.environ["CALLBACK_ENABLED"] = "true" if body.godeye_enabled else "false"
         if body.godeye_callback_url:
             os.environ["CALLBACK_URL"] = body.godeye_callback_url

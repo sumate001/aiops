@@ -11,16 +11,20 @@ logger = logging.getLogger(__name__)
 
 @router.get("/healthz")
 async def healthz() -> dict:
-    ollama_status = "unreachable"
+    llm_status = "unreachable"
     aiops_ml_status = "unreachable"
 
     async with httpx.AsyncClient(timeout=5.0) as client:
-        try:
-            resp = await client.get(f"{config.ollama.base_url}/api/tags")
-            if resp.status_code == 200:
-                ollama_status = "reachable"
-        except Exception as exc:
-            logger.debug("Ollama health check failed: %s", exc)
+        if config.llm.provider == "ollama":
+            try:
+                resp = await client.get(f"{config.llm.base_url}/api/tags")
+                if resp.status_code == 200:
+                    llm_status = "reachable"
+            except Exception as exc:
+                logger.debug("Ollama health check failed: %s", exc)
+        else:
+            # remote OpenAI-compatible providers: no cheap unauthenticated probe
+            llm_status = "configured"
 
         if config.aiops_ml.enabled:
             try:
@@ -34,7 +38,8 @@ async def healthz() -> dict:
 
     return {
         "status": "ok",
-        "ollama": ollama_status,
-        "ollama_model": config.ollama.model,
+        "llm": llm_status,
+        "llm_provider": config.llm.provider,
+        "llm_model": config.llm.model,
         "aiops_ml": aiops_ml_status,
     }

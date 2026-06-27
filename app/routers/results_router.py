@@ -48,7 +48,7 @@ async def pipeline_status() -> dict:
 
     log_ml = await _check(config.log_ml.base_url) if config.log_ml.enabled else {"status": "disabled"}
     perplexica = await _check(config.perplexica.base_url, "/api/providers") if config.perplexica.enabled else {"status": "disabled"}
-    ollama = await _check(config.ollama.base_url, "/api/tags") if True else {"status": "disabled"}
+    llm = await _check(config.llm.base_url, "/api/tags") if config.llm.provider == "ollama" else {"status": "configured"}
 
     return {
         "agents": {
@@ -59,7 +59,7 @@ async def pipeline_status() -> dict:
             "AA_synthesizer": {"status": "up", "note": "always on"},
         },
         "integrations": {
-            "ollama":   {**ollama, "model": config.ollama.model},
+            "llm":   {**llm, "provider": config.llm.provider, "model": config.llm.model},
             "godeye_callback": {
                 "url": config.godeye.callback_url,
                 "enabled": config.godeye.enabled,

@@ -24,9 +24,10 @@ async def lifespan(app: FastAPI):
     init_db()
     init_result_table()
     logging.getLogger(__name__).info(
-        "log-analyzer starting — ollama=%s model=%s aiops_ml=%s enabled=%s",
-        config.ollama.base_url,
-        config.ollama.model,
+        "log-analyzer starting — llm=%s/%s model=%s aiops_ml=%s enabled=%s",
+        config.llm.provider,
+        config.llm.base_url,
+        config.llm.model,
         config.aiops_ml.base_url,
         config.aiops_ml.enabled,
     )
