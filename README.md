@@ -123,10 +123,10 @@ sudo -E bash deploy.sh
 ```
 > ถ้าตั้ง provider/Ollama ผ่านหน้า **Settings** อยู่แล้ว ไม่ต้อง export env — รัน `sudo bash deploy.sh` ได้เลย
 
-> 🔑 **ใช้ `sudo`** ถ้าผู้ใช้ปัจจุบันไม่มีสิทธิ์ Docker (ไม่ได้อยู่ใน group `docker`) หรือเขียน
-> ไฟล์บางตัวไม่ได้ — SearXNG container ต้องคุยกับ Docker daemon
-> ทางเลือกที่ไม่ต้อง sudo: `sudo usermod -aG docker $USER` แล้ว logout/login ใหม่ครั้งเดียว
-> จากนั้นรัน `bash deploy.sh` ได้เลย (แนะนำกว่า เพราะ venv/ไฟล์จะไม่ถูก root เป็นเจ้าของ)
+> 🔑 **ใช้ `sudo` รอบแรก** ถ้ายังไม่มีสิทธิ์ Docker — SearXNG container ต้องคุยกับ Docker daemon
+> deploy.sh จะ **เพิ่ม user เข้า group `docker` ให้อัตโนมัติ** (ใช้ user จริงแม้รันผ่าน sudo)
+> จากนั้น **logout/login ครั้งเดียว** (หรือ `newgrp docker`) แล้วรอบถัดไปรัน `bash deploy.sh`
+> ได้เลยไม่ต้อง sudo (แนะนำ — venv/ไฟล์จะไม่ถูก root ยึด + ไม่ต้องลง Node ซ้ำใน /root)
 
 **Prerequisites:** Python 3.11+ (3.14 แนะนำ), **Node ≥ 18 (22 แนะนำ — `nvm use 22`)**, Docker (สำหรับ SearXNG)
 deploy.sh จะเช็คให้และหยุดพร้อมบอกวิธีแก้ถ้าขาด

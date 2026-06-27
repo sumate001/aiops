@@ -23,6 +23,19 @@ export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 
 # sudo helper — empty if already root, else "sudo" when available.
 if [ "$(id -u)" -eq 0 ]; then SUDO=""; elif command -v sudo >/dev/null; then SUDO="sudo"; else SUDO=""; fi
+# Real invoking user (under `sudo` $USER is root — use $SUDO_USER instead).
+REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
+
+# Add the real user to the docker group so future runs don't need sudo. Takes
+# effect on next login only — the current run keeps using `sudo docker`.
+add_to_docker_group() {
+  [ "$REAL_USER" = "root" ] && return
+  id -nG "$REAL_USER" 2>/dev/null | tr ' ' '\n' | grep -qx docker && return  # already a member
+  if $SUDO usermod -aG docker "$REAL_USER" 2>/dev/null; then
+    warn "added '$REAL_USER' to the 'docker' group — log out/in (or run: newgrp docker)"
+    warn "after that, run deploy.sh WITHOUT sudo"
+  fi
+}
 # docker may need sudo until the user's docker-group membership takes effect.
 if docker info >/dev/null 2>&1; then DOCKER="docker"; else DOCKER="$SUDO docker"; fi
 
@@ -112,8 +125,8 @@ ensure_docker() {
     if command -v apt-get >/dev/null && { [ "$(id -u)" -eq 0 ] || [ -n "$SUDO" ]; }; then
       warn "docker not installed — installing docker.io"
       $SUDO apt-get update -qq && $SUDO apt-get install -y -qq docker.io \
-        && $SUDO systemctl enable --now docker >/dev/null 2>&1 \
-        && $SUDO usermod -aG docker "${USER:-$(id -un)}" 2>/dev/null || true
+        && $SUDO systemctl enable --now docker >/dev/null 2>&1 || true
+      add_to_docker_group
     fi
   fi
   if ! command -v docker >/dev/null; then
@@ -123,7 +136,8 @@ ensure_docker() {
   docker info >/dev/null 2>&1 || $SUDO systemctl start docker >/dev/null 2>&1 || true
   if docker info >/dev/null 2>&1; then DOCKER="docker"
   elif [ -n "$SUDO" ] && $SUDO docker info >/dev/null 2>&1; then
-    DOCKER="$SUDO docker"; warn "using 'sudo docker' (re-login to use docker without sudo)"
+    DOCKER="$SUDO docker"; warn "using 'sudo docker' for this run"
+    add_to_docker_group   # so the next run won't need sudo (after re-login)
   else
     warn "docker daemon not reachable — SearXNG/A2 external search will be SKIPPED"; SEARXNG_ENABLED=0
   fi
