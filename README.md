@@ -117,17 +117,29 @@ git clone https://github.com/sumate001/aiops.git && cd aiops
 # ชี้ไปยัง Ollama ที่มี model gemma4:e4b + nomic-embed-text (default = localhost)
 export OLLAMA_BASE_URL=http://100.x.x.x:11434     # remote/Tailscale หรือ localhost
 
-bash deploy.sh            # install (ครั้งแรก) + start ทุกอย่าง → เปิด http://localhost:3002
+# install (ครั้งแรก) + start ทุกอย่าง → เปิด http://localhost:3002
+# ⚠️ ใช้ sudo -E เพื่อให้ env (OLLAMA_BASE_URL ฯลฯ) ส่งต่อเข้า sudo ด้วย
+sudo -E bash deploy.sh
 ```
+> ถ้าตั้ง provider/Ollama ผ่านหน้า **Settings** อยู่แล้ว ไม่ต้อง export env — รัน `sudo bash deploy.sh` ได้เลย
+
+> 🔑 **ใช้ `sudo`** ถ้าผู้ใช้ปัจจุบันไม่มีสิทธิ์ Docker (ไม่ได้อยู่ใน group `docker`) หรือเขียน
+> ไฟล์บางตัวไม่ได้ — SearXNG container ต้องคุยกับ Docker daemon
+> ทางเลือกที่ไม่ต้อง sudo: `sudo usermod -aG docker $USER` แล้ว logout/login ใหม่ครั้งเดียว
+> จากนั้นรัน `bash deploy.sh` ได้เลย (แนะนำกว่า เพราะ venv/ไฟล์จะไม่ถูก root เป็นเจ้าของ)
 
 **Prerequisites:** Python 3.11+ (3.14 แนะนำ), **Node ≥ 18 (22 แนะนำ — `nvm use 22`)**, Docker (สำหรับ SearXNG)
 deploy.sh จะเช็คให้และหยุดพร้อมบอกวิธีแก้ถ้าขาด
 
 ```bash
-bash deploy.sh --status   # ดูสถานะทุก service
-bash deploy.sh --start    # (re)start เฉย ๆ ข้าม install
-bash deploy.sh --stop     # หยุดทั้งหมด
+sudo bash deploy.sh --status   # ดูสถานะทุก service
+sudo bash deploy.sh --start    # (re)start เฉย ๆ ข้าม install
+sudo bash deploy.sh --stop     # หยุดทั้งหมด
 ```
+
+> ⚠️ ถ้ารันด้วย `sudo` ครั้งแรก แล้วภายหลังรันแบบไม่มี sudo (หรือสลับไปมา) อาจเจอปัญหา
+> สิทธิ์ไฟล์ `.venv/`, `logs/`, `.run/`, `frontend/.next/` (root เป็นเจ้าของ) — ให้ใช้คำสั่ง
+> เดิมตลอด หรือ `sudo chown -R $USER:$USER .` เพื่อคืนสิทธิ์ก่อนสลับ
 
 logs อยู่ใน `logs/` · pidfiles ใน `.run/` · config อยู่ที่ `config.yaml`
 (สร้างจาก `config.yaml.example` อัตโนมัติครั้งแรก — แก้ `ollama.base_url` ตามจริง)
