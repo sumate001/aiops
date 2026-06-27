@@ -4,6 +4,9 @@ POST /api/config — update config.yaml และ reload
 """
 
 import logging
+import os
+
+import httpx
 import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -56,6 +59,27 @@ async def get_config() -> dict:
     }
 
 
+@router.get("/ollama/models")
+async def list_ollama_models(base_url: str) -> dict:
+    """Fetch installed model names from an arbitrary Ollama endpoint.
+
+    The frontend can't reach private/Tailscale Ollama hosts directly (CORS +
+    network), and the static /ollama-proxy rewrite is pinned to one URL — so the
+    settings page asks the backend to probe whatever URL the user typed.
+    """
+    url = base_url.rstrip("/") + "/api/tags"
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            data = r.json()
+        models = [m["name"] for m in data.get("models", []) if m.get("name")]
+        return {"models": models}
+    except Exception as exc:
+        logger.warning("Failed to list Ollama models from %s: %s", url, exc)
+        return {"models": [], "error": str(exc)}
+
+
 @router.post("/config")
 async def update_config(body: ConfigUpdate) -> dict:
     try:
@@ -87,6 +111,22 @@ async def update_config(body: ConfigUpdate) -> dict:
 
         with open("config.yaml", "w") as f:
             yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
+
+        # Sync the env vars that _apply_env_overrides honours, otherwise a stale
+        # OLLAMA_BASE_URL/etc in the process env would clobber what we just saved
+        # on the next load_config() — making the UI look like "save didn't stick".
+        os.environ["OLLAMA_BASE_URL"] = body.ollama_base_url
+        os.environ["OLLAMA_MODEL"] = body.ollama_model
+        os.environ["LOG_ML_BASE_URL"] = body.log_ml_base_url
+        os.environ["LOG_ML_ENABLED"] = "true" if body.log_ml_enabled else "false"
+        os.environ["PERPLEXICA_BASE_URL"] = body.perplexica_base_url
+        os.environ["PERPLEXICA_ENABLED"] = "true" if body.perplexica_enabled else "false"
+        os.environ["PERPLEXICA_CHAT_MODEL"] = body.perplexica_chat_model
+        os.environ["CALLBACK_ENABLED"] = "true" if body.godeye_enabled else "false"
+        if body.godeye_callback_url:
+            os.environ["CALLBACK_URL"] = body.godeye_callback_url
+        else:
+            os.environ.pop("CALLBACK_URL", None)
 
         # reload config in-process
         import app.config as cfg_module

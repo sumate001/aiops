@@ -29,13 +29,25 @@ export default function Settings() {
 
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
 
+  const [ollamaModelsMsg, setOllamaModelsMsg] = useState<string | null>(null);
+
   const fetchOllamaModels = async (baseUrl: string) => {
+    if (!baseUrl) return;
+    setOllamaModelsMsg("Loading models…");
     try {
-      const r = await fetch(`/ollama-proxy/api/tags`);
+      // Ask the backend to probe the URL the user actually typed (not the
+      // static /ollama-proxy rewrite, which is pinned to one endpoint).
+      const r = await fetch(`/api/ollama/models?base_url=${encodeURIComponent(baseUrl)}`);
       const d = await r.json();
-      const models = (d.models ?? []).map((m: any) => m.name as string);
+      const models: string[] = d.models ?? [];
       setOllamaModels(models);
-    } catch {}
+      setOllamaModelsMsg(
+        models.length > 0 ? null : `No models found at ${baseUrl}${d.error ? ` (${d.error})` : ""}`
+      );
+    } catch (e) {
+      setOllamaModels([]);
+      setOllamaModelsMsg(`Failed to reach ${baseUrl}`);
+    }
   };
 
   const [perplexicaCfg, setPerplexicaCfg] = useState({
@@ -259,16 +271,30 @@ export default function Settings() {
             placeholder="http://localhost:11434"
             value={form.ollama_base_url}
             onChange={(v) => setForm({ ...form, ollama_base_url: v })}
+            onBlur={(v) => fetchOllamaModels(v).catch(() => {})}
           />
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Model</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs text-gray-400">Model</label>
+              <button
+                type="button"
+                onClick={() => fetchOllamaModels(form.ollama_base_url).catch(() => {})}
+                className="text-xs text-blue-400 hover:text-blue-300"
+              >
+                ↻ Refresh models
+              </button>
+            </div>
+            {ollamaModelsMsg && <p className="text-xs text-yellow-500 mb-1">{ollamaModelsMsg}</p>}
             {ollamaModels.length > 0 ? (
               <select
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
                 value={form.ollama_model}
                 onChange={(e) => setForm({ ...form, ollama_model: e.target.value })}
               >
-                {ollamaModels.map((m) => <option key={m} value={m}>{m}</option>)}
+                {(form.ollama_model && !ollamaModels.includes(form.ollama_model)
+                  ? [form.ollama_model, ...ollamaModels]
+                  : ollamaModels
+                ).map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
             ) : (
               <input
@@ -327,11 +353,13 @@ function Field({
   label,
   value,
   onChange,
+  onBlur,
   placeholder,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
+  onBlur?: (v: string) => void;
   placeholder?: string;
 }) {
   return (
@@ -341,6 +369,7 @@ function Field({
         className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onBlur={(e) => onBlur?.(e.target.value)}
         placeholder={placeholder}
       />
     </div>

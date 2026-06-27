@@ -16,6 +16,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Make nvm-installed node available in non-login shells.
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+# shellcheck disable=SC1090
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
+
+# sudo helper — empty if already root, else "sudo" when available.
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; elif command -v sudo >/dev/null; then SUDO="sudo"; else SUDO=""; fi
+# docker may need sudo until the user's docker-group membership takes effect.
+if docker info >/dev/null 2>&1; then DOCKER="docker"; else DOCKER="$SUDO docker"; fi
+
 # ── Ports / config ──────────────────────────────────────────────────────────
 PORT_BACKEND="${PORT_BACKEND:-8200}"
 PORT_LOG_ML="${PORT_LOG_ML:-3050}"
@@ -39,7 +49,11 @@ ok()   { printf "${c_ok}[deploy]${c_off} %s\n" "$*"; }
 warn() { printf "${c_warn}[deploy]${c_off} %s\n" "$*"; }
 die()  { printf "${c_err}[deploy] ERROR:${c_off} %s\n" "$*" >&2; exit 1; }
 
-port_up() { lsof -i ":$1" -sTCP:LISTEN -t >/dev/null 2>&1; }
+port_up() {
+  # lsof can't see ports owned by other users (e.g. root docker-proxy); fall back to ss.
+  lsof -i ":$1" -sTCP:LISTEN -t >/dev/null 2>&1 && return 0
+  ss -ltn 2>/dev/null | grep -qE "[:.]$1[[:space:]]"
+}
 
 wait_health() { # url, name, tries
   local url="$1" name="$2" tries="${3:-30}"
@@ -60,22 +74,80 @@ start_svc() {
   echo $! >"$RUN_DIR/$name.pid"
 }
 
-# ── Prerequisite checks ─────────────────────────────────────────────────────
+# ── Prerequisite checks (auto-install what's missing, no manual steps) ───────
+# Whether SearXNG (Docker) is usable. Set false when Docker can't be provided.
+SEARXNG_ENABLED=1
+
+ensure_python() {
+  [ -n "$PYTHON" ] && command -v "$PYTHON" >/dev/null || die "python3 not found (need 3.11+)"
+  # venv must be able to bootstrap pip (Debian splits this into python3-venv).
+  if "$PYTHON" -Im ensurepip --version >/dev/null 2>&1; then return; fi
+  warn "python venv/pip missing — installing python3-venv"
+  if [ -n "$SUDO$([ "$(id -u)" -eq 0 ] && echo root)" ] && command -v apt-get >/dev/null; then
+    local pyver; pyver="$("$PYTHON" -c 'import sys;print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+    $SUDO apt-get update -qq && $SUDO apt-get install -y -qq "python${pyver}-venv" python3-pip \
+      || warn "apt install python venv failed — will fall back to get-pip.py"
+  fi
+}
+
+ensure_node() {
+  local nmaj=0
+  command -v node >/dev/null && nmaj="$(node -v | sed -E 's/^v([0-9]+).*/\1/')"
+  if [ "$nmaj" -ge 20 ]; then return; fi
+  warn "Node >=20 not found (have: ${nmaj:-none}) — installing Node 22 via nvm"
+  if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+    curl -fsSL -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash >/dev/null 2>&1 \
+      || die "nvm install failed (no network?)"
+    # shellcheck disable=SC1090
+    . "$NVM_DIR/nvm.sh"
+  fi
+  nvm install 22 >/dev/null 2>&1 && nvm alias default 22 >/dev/null 2>&1
+  nvm use 22 >/dev/null 2>&1
+  command -v node >/dev/null || die "node still unavailable after nvm install"
+}
+
+ensure_docker() {
+  if [ "${DOCKER%% *}" = "docker" ] && docker info >/dev/null 2>&1; then return; fi
+  if ! command -v docker >/dev/null; then
+    if command -v apt-get >/dev/null && { [ "$(id -u)" -eq 0 ] || [ -n "$SUDO" ]; }; then
+      warn "docker not installed — installing docker.io"
+      $SUDO apt-get update -qq && $SUDO apt-get install -y -qq docker.io \
+        && $SUDO systemctl enable --now docker >/dev/null 2>&1 \
+        && $SUDO usermod -aG docker "${USER:-$(id -un)}" 2>/dev/null || true
+    fi
+  fi
+  if ! command -v docker >/dev/null; then
+    warn "docker unavailable — SearXNG/A2 external search will be SKIPPED"; SEARXNG_ENABLED=0; return
+  fi
+  # Daemon up? Try to start it; then decide whether plain docker or sudo docker works.
+  docker info >/dev/null 2>&1 || $SUDO systemctl start docker >/dev/null 2>&1 || true
+  if docker info >/dev/null 2>&1; then DOCKER="docker"
+  elif [ -n "$SUDO" ] && $SUDO docker info >/dev/null 2>&1; then
+    DOCKER="$SUDO docker"; warn "using 'sudo docker' (re-login to use docker without sudo)"
+  else
+    warn "docker daemon not reachable — SearXNG/A2 external search will be SKIPPED"; SEARXNG_ENABLED=0
+  fi
+}
+
 check_prereqs() {
-  [ -n "$PYTHON" ] && command -v "$PYTHON" >/dev/null || die "python not found (need 3.11+; 3.14 recommended)"
-  command -v node >/dev/null || die "node not found — install Node 22 (nvm install 22 && nvm use 22)"
-  local nmaj; nmaj="$(node -v | sed -E 's/^v([0-9]+).*/\1/')"
-  [ "$nmaj" -ge 20 ] || die "Node $nmaj too old — Vane/Next.js 16 needs >=20.9 (run: nvm install 22 && nvm use 22)"
-  command -v docker >/dev/null || die "docker not found — required for SearXNG"
-  docker info >/dev/null 2>&1 || die "docker daemon not running — start Docker Desktop first"
-  ok "prereqs OK — $("$PYTHON" --version 2>&1), node $(node -v), docker present"
+  ensure_python
+  ensure_node
+  ensure_docker
+  ok "prereqs OK — $("$PYTHON" --version 2>&1), node $(node -v 2>&1), docker: $([ "$SEARXNG_ENABLED" = 1 ] && echo "$DOCKER" || echo skipped)"
 }
 
 # ── Install ─────────────────────────────────────────────────────────────────
 install_all() {
   log "[1/4] Python dependencies (backend + log-ml)"
   if [[ ! -x "$VENV/bin/python" ]]; then
-    "$PYTHON" -m venv "$VENV"
+    if "$PYTHON" -Im ensurepip --version >/dev/null 2>&1; then
+      "$PYTHON" -m venv "$VENV"
+    else
+      # No ensurepip (couldn't apt-install) — make a pip-less venv and bootstrap pip.
+      "$PYTHON" -m venv --without-pip "$VENV"
+      curl -fsSL https://bootstrap.pypa.io/get-pip.py | "$VENV/bin/python" - \
+        || die "failed to bootstrap pip into $VENV"
+    fi
     log "  created virtualenv at $VENV"
   fi
   PYTHON="$VENV/bin/python"
@@ -107,14 +179,16 @@ install_all() {
 
 # ── Start ───────────────────────────────────────────────────────────────────
 start_all() {
-  # SearXNG (docker)
-  if docker ps --format '{{.Names}}' | grep -q '^aiops-searxng$'; then
+  # SearXNG (docker) — skipped gracefully when Docker isn't available.
+  if [ "${SEARXNG_ENABLED:-1}" != 1 ]; then
+    warn "SearXNG skipped (no Docker) — A2 external search disabled, rest of stack runs"
+  elif $DOCKER ps --format '{{.Names}}' | grep -q '^aiops-searxng$'; then
     ok "SearXNG already running"
-  elif docker ps -a --format '{{.Names}}' | grep -q '^aiops-searxng$'; then
-    log "starting existing SearXNG container"; docker start aiops-searxng >/dev/null
+  elif $DOCKER ps -a --format '{{.Names}}' | grep -q '^aiops-searxng$'; then
+    log "starting existing SearXNG container"; $DOCKER start aiops-searxng >/dev/null
   else
     log "creating SearXNG container on :$PORT_SEARXNG"
-    docker run -d --name aiops-searxng -p "${PORT_SEARXNG}:8080" \
+    $DOCKER run -d --name aiops-searxng -p "${PORT_SEARXNG}:8080" \
       -e SEARXNG_SECRET="$(openssl rand -hex 32)" searxng/searxng:latest >/dev/null
   fi
 
@@ -135,9 +209,9 @@ start_all() {
 
   log "waiting for services…"
   wait_health "http://localhost:$PORT_LOG_ML/healthz"        "log-ml"
-  wait_health "http://localhost:$PORT_SEARXNG/healthz"       "SearXNG"
+  [ "${SEARXNG_ENABLED:-1}" = 1 ] && wait_health "http://localhost:$PORT_SEARXNG/healthz" "SearXNG"
   wait_health "http://localhost:$PORT_VANE/api/providers"    "Perplexica"
-  wait_health "http://localhost:$PORT_BACKEND/health"        "backend"
+  wait_health "http://localhost:$PORT_BACKEND/healthz"       "backend"
   wait_health "http://localhost:$PORT_UI"                    "frontend"
   status_all
 }
@@ -152,8 +226,8 @@ stop_all() {
       rm -f "$pidf"
     fi
   done
-  if docker ps --format '{{.Names}}' | grep -q '^aiops-searxng$'; then
-    docker stop aiops-searxng >/dev/null && ok "stopped SearXNG"
+  if command -v docker >/dev/null && $DOCKER ps --format '{{.Names}}' 2>/dev/null | grep -q '^aiops-searxng$'; then
+    $DOCKER stop aiops-searxng >/dev/null && ok "stopped SearXNG"
   fi
 }
 
