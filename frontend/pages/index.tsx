@@ -68,8 +68,8 @@ export default function Dashboard() {
 
   const fetchAll = async () => {
     const [s, r] = await Promise.all([
-      fetch("/api/status").then((x) => x.json()).catch(() => null),
-      fetch("/api/results?limit=10").then((x) => x.json()).catch(() => ({ results: [] })),
+      fetch("/api/status", { cache: "no-store" }).then((x) => x.json()).catch(() => null),
+      fetch("/api/results?limit=10", { cache: "no-store" }).then((x) => x.json()).catch(() => ({ results: [] })),
     ]);
     setPipeStatus(s);
     const rows: ResultRow[] = r.results || [];
@@ -77,7 +77,7 @@ export default function Dashboard() {
 
     // fetch full payload of latest result
     if (rows[0]) {
-      const full = await fetch(`/api/results/${rows[0].id}`).then((x) => x.json()).catch(() => null);
+      const full = await fetch(`/api/results/${rows[0].id}`, { cache: "no-store" }).then((x) => x.json()).catch(() => null);
       setLatest(full);
     }
     setLoading(false);

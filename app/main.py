@@ -43,6 +43,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# API responses are live state — never let a proxy/browser cache or revalidate
+# them. Without this, a conditional GET can come back 304 with an empty body;
+# the dashboard's fetch().json() then throws and every status renders "down".
+@app.middleware("http")
+async def no_store_api(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith(("/api", "/healthz")):
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+    return response
+
 app.include_router(health.router)
 app.include_router(analyze.router)
 app.include_router(ingest.router)
