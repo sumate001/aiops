@@ -69,6 +69,15 @@ port_up() {
   ss -ltn 2>/dev/null | grep -qE "[:.]$1[[:space:]]"
 }
 
+# Kill whatever is listening on a port — including untracked processes (a
+# manually-started `next dev`, a stale run) that our pidfiles don't know about.
+kill_port() {
+  local port="$1"
+  if command -v fuser >/dev/null 2>&1; then $SUDO fuser -k "${port}/tcp" >/dev/null 2>&1 || true; fi
+  local pids; pids="$(lsof -ti ":$port" -sTCP:LISTEN 2>/dev/null || true)"
+  [ -n "$pids" ] && kill $pids 2>/dev/null || true
+}
+
 wait_health() { # url, name, tries
   local url="$1" name="$2" tries="${3:-30}"
   for _ in $(seq 1 "$tries"); do
@@ -253,6 +262,12 @@ stop_all() {
       rm -f "$pidf"
     fi
   done
+  # Belt-and-suspenders: free any port still held by an untracked process so the
+  # next start_all actually (re)launches fresh code instead of skipping it.
+  for entry in "frontend:$PORT_UI" "backend:$PORT_BACKEND" "perplexica:$PORT_VANE" "log-ml:$PORT_LOG_ML"; do
+    local p="${entry##*:}"
+    if port_up "$p"; then kill_port "$p"; sleep 1; port_up "$p" || ok "freed :$p (${entry%%:*})"; fi
+  done
   if command -v docker >/dev/null && $DOCKER ps --format '{{.Names}}' 2>/dev/null | grep -q '^aiops-searxng$'; then
     $DOCKER stop aiops-searxng >/dev/null && ok "stopped SearXNG"
   fi
@@ -266,15 +281,23 @@ update_all() {
   [[ -x "$VENV/bin/python" ]] || die "no virtualenv at $VENV — run 'bash deploy.sh' first"
   PYTHON="$VENV/bin/python"
 
-  log "[1/3] refreshing Python dependencies"
+  # Stop first (frees ports incl. untracked/dev processes) so the rebuild writes
+  # into a quiesced tree and the restart launches the fresh build.
+  log "[1/4] stopping services"
+  stop_all
+
+  log "[2/4] refreshing Python dependencies"
   "$VENV/bin/pip" install -q -r requirements.txt
   [ -f log-ml/requirements.txt ] && "$VENV/bin/pip" install -q -r log-ml/requirements.txt
 
-  log "[2/3] rebuilding frontend"
+  # Wipe the previous build — stale hashed chunks left behind make the running
+  # server reference JS files that 404, so the page never hydrates (all panels
+  # render their default "down" state and never fetch /api/status).
+  log "[3/4] clean rebuild of frontend"
+  rm -rf frontend/.next
   ( cd frontend && npm install && npm run build )
 
-  log "[3/3] restarting services"
-  stop_all
+  log "[4/4] starting services"
   check_prereqs
   start_all
 }
