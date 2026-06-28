@@ -34,7 +34,10 @@ class PerplexicaConfig(BaseModel):
     base_url: str = "http://localhost:3001"
     timeout: str = "90s"  # web-search enrichment; "speed" mode answers in ~20s
     chat_model: str = "gemma4:e4b"
-    embedding_model: str = "nomic-embed-text:latest"
+    # Embeddings run on Vane's local Transformers provider (no Ollama). This is
+    # passed as the *preferred* key; if it isn't found, _get_embedding falls back
+    # to the first Transformers model anyway — so A2 never touches Ollama.
+    embedding_model: str = "Xenova/all-MiniLM-L6-v2"
     # Vane optimizationMode. "speed" is the reliable choice on free Groq models
     # (returns web sources, no tool-use hangs); "balanced"/"quality" can stall.
     mode: str = "speed"
