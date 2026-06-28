@@ -8,7 +8,7 @@
 |-------|--------|----------|
 | A1 Rule | ✅ ทำงาน | |
 | A1 IF (log-ml) | ✅ ทำงาน | รันที่ port 3050 |
-| A2 Perplexica | ✅ ทำงาน | verify ผ่าน pipeline จริง 265s (5 sources, answer 2000 ตัว) |
+| A2 Perplexica | ✅ ทำงาน | Groq `openai/gpt-oss-20b`, speed mode — verify จริง ~24s (15 sources found, 5 saved) |
 | A3 MiroFish | ✅ ทำงาน | Redis scenario → Software=100%, Hardware=20% |
 | AA Synthesizer | ✅ ทำงาน | |
 
@@ -21,17 +21,27 @@
   - แก้ใน `perplexica-src/.next/standalone/.next/server/chunks/136.js` (backup: `136.js.bak`)
   - แก้ source ด้วยที่ `perplexica-src/src/lib/models/providers/ollama/index.ts`
 
-## ✅ A2 แก้แล้ว — สาเหตุ & วิธีแก้
+## ✅ A2 แก้แล้ว (รอบล่าสุด — ย้ายไป Groq) — สาเหตุ & วิธีแก้
 
-**สาเหตุจริง:** remote Ollama (100.94.37.18) รัน inference บน **CPU** = ~9.8 tok/s
-(วัดได้: load 11s, prompt eval 42 tok/s, gen 9.8 tok/s) Perplexica สร้างคำตอบ ~1500 tok
-+ prompt eval ของ context 20 docs → รวม 225-300s+ เกิน timeout เดิม 300s
+**สาเหตุจริง:** เมื่อย้าย chat ของ A2 มาใช้ Groq (free) → Vane เรียกโมเดลด้วย **strict
+`json_schema`** *และ* **tool-calling** (web_search) พร้อมกัน โมเดลที่ทำไม่ได้ทั้งคู่จะ
+error/ค้างจน timeout แล้วลากให้ผลทั้งก้อนไม่ถูก save (เพราะ `save_result()` อยู่ท้าย pipeline)
+- `openai/gpt-oss-120b` / `meta-llama/llama-4-scout` → tool_use_failed หรือไม่ค้น web
+- `llama-3.3-70b` / `qwen3` → ไม่รองรับ json_schema (400)
 
-**แก้:** เพิ่ม `perplexica.timeout` → **480s** (ทั้ง `app/config.py` default และ `config.yaml`)
-verify ผ่าน pipeline จริง: A2 OK ใน 265s, answer 2000 ตัว, 5 sources
+**แก้:**
+1. stage `llm.perplexica.model` → **`openai/gpt-oss-20b`** (ตัวเดียวที่ผ่านครบ + ได้ sources จริง)
+2. `perplexica_client.build_query()` — ตัด quote/SQL/id/timestamp ออก → query สะอาด
+   ทำให้ speed mode ค้น web จริง (ไม่งั้นโมเดลตอบจากความรู้เอง 0 sources)
+3. เพิ่ม `perplexica.mode` (Vane optimizationMode) default **`speed`** — เสถียร + ได้ sources;
+   `balanced`/`quality` ลึกกว่าแต่บนโมเดลฟรี Groq อาจค้างจาก tool-use loop
+4. ลด `perplexica.timeout` **480s → 90s** (speed ตอบ ~20s/host)
 
-**ถ้าจะเร่งให้เร็วขึ้น (อนาคต):** ย้าย Ollama ไปเครื่อง GPU, ตั้ง keep_alive กัน reload,
-หรือลด num_ctx (ตอนนี้ 32000 ใน Perplexica standalone JS)
+verify ผ่าน pipeline จริง: A2 OK ใน ~24s, answer 5806 chars, **15 sources** (save 5)
+
+> หมายเหตุ: ปม Ollama-CPU/480s เดิมไม่เกี่ยวแล้ว (chat ย้ายไป Groq, embedding ใช้
+> Transformers ในเครื่อง ไม่พึ่ง Ollama) ถ้าจะใช้ quality mode ให้สลับ stage perplexica
+> ไป provider ที่ tool-use เสถียรกว่า (เช่น Cerebras/OpenAI) แล้วค่อยเปิด
 
 ## ✅ แก้เพิ่มเติม (callback path)
 
