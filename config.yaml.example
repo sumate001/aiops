@@ -20,10 +20,12 @@ log_ml:
   enabled: true
 
 perplexica:
-  base_url: "http://localhost:3001"   # A2 Perplexica (SearXNG + AI synthesis)
-  chat_model: "gemma4:e4b"            # ต้องมีใน Ollama (ดู /api/tags)
+  base_url: "http://localhost:3001"   # A2 Perplexica/Vane (SearXNG + AI synthesis)
+  chat_model: "gemma4:e4b"            # legacy (embedding-side); chat model มาจาก llm.perplexica
   embedding_model: "nomic-embed-text:latest"
-  timeout: "480s"   # A2 ช้าเมื่อ Ollama รันบน CPU (~10 tok/s) — เผื่อ 4-7 นาที/host
+  mode: "speed"     # Vane optimizationMode — speed = เสถียร + ได้ web sources บนโมเดลฟรี
+                    # (balanced/quality อาจค้างจาก tool-use loop บน Groq free models)
+  timeout: "90s"    # speed mode ตอบ ~20s/host
   enabled: true     # false = ข้าม external search enrichment
 
 ollama:
@@ -38,19 +40,21 @@ ollama:
 #  github, siliconflow, llm7, ovhcloud — ดู app/services/llm_providers.py)
 # ดูรายชื่อ free APIs: https://github.com/mnfst/awesome-free-llm-apis
 llm:
-  enabled: false                       # เปิดเพื่อให้ LLM enrich (ปิด = rule-based เท่านั้น)
-  # ── Default AI: ทุก stage ใช้ค่านี้ ถ้าไม่เปิด override ของ stage นั้น ──
-  provider: "ollama"                   # หรือ groq / cerebras / gemini / openrouter ...
-  base_url: "http://localhost:11434"   # OpenAI-compat: เช่น https://api.groq.com/openai/v1
-  model: "gemma4:e4b"                  # เช่น llama-3.3-70b-versatile (groq)
-  api_key: null                        # หรือ set ผ่าน env (เช่น GROQ_API_KEY)
+  enabled: true                        # เปิดเพื่อให้ LLM enrich (ปิด = rule-based เท่านั้น)
+  # ── Default AI (ค่าที่ทดสอบแล้วทำงานได้ฟรี): Groq llama-3.3-70b ──
+  # ทุก stage ใช้ค่านี้ ถ้าไม่เปิด override ของ stage นั้น
+  provider: "groq"                     # หรือ ollama / cerebras / gemini / openrouter ...
+  base_url: "https://api.groq.com/openai/v1"
+  model: "llama-3.3-70b-versatile"     # รองรับ tool/JSON ดีสำหรับ MiroFish + Synthesizer
+  api_key: null                        # set ผ่าน env GROQ_API_KEY หรือใส่ที่นี่
   timeout: "120s"
   temperature: 0.1
   # ── Per-stage override: ตั้ง override: true เพื่อใช้ provider/model ต่างจาก default ──
-  mirofish:    { override: false, provider: "ollama", base_url: "http://localhost:11434", model: "gemma4:e4b", api_key: null }
-  synthesizer: { override: false, provider: "ollama", base_url: "http://localhost:11434", model: "gemma4:e4b", api_key: null }
-  # perplexica: เปลี่ยนเฉพาะ chat model ของ A2 (embedding ยังใช้ ollama/transformers ในเครื่อง)
-  perplexica:  { override: false, provider: "ollama", base_url: "http://localhost:11434", model: "gemma4:e4b", api_key: null }
+  mirofish:    { override: false, provider: "groq", base_url: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile", api_key: null }
+  synthesizer: { override: false, provider: "groq", base_url: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile", api_key: null }
+  # perplexica (A2): Vane ต้องการโมเดลที่ทำได้ทั้ง strict json_schema + tool-calling —
+  # openai/gpt-oss-20b (Groq) คือตัวที่ทดสอบแล้วผ่านครบ (scout/llama-3.3/qwen ใช้ไม่ได้)
+  perplexica:  { override: true, provider: "groq", base_url: "https://api.groq.com/openai/v1", model: "openai/gpt-oss-20b", api_key: null }
 
 analysis:
   max_log_entries: 500        # cap per request ป้องกัน OOM

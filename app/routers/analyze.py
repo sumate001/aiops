@@ -245,6 +245,7 @@ async def _phase4_a2(st: _HostState) -> None:
         chat_provider=px.provider,
         chat_base_url=px.base_url,
         chat_api_key=px.api_key,
+        mode=config.perplexica.mode,
     )
     if perp_result:
         st.enrichment = PerplexicaEnrichment(

@@ -32,9 +32,12 @@ class GodEyeConfig(BaseModel):
 
 class PerplexicaConfig(BaseModel):
     base_url: str = "http://localhost:3001"
-    timeout: str = "480s"  # remote Ollama is CPU-bound (~10 tok/s); A2 answer gen can take 4-7 min
+    timeout: str = "90s"  # web-search enrichment; "speed" mode answers in ~20s
     chat_model: str = "gemma4:e4b"
     embedding_model: str = "nomic-embed-text:latest"
+    # Vane optimizationMode. "speed" is the reliable choice on free Groq models
+    # (returns web sources, no tool-use hangs); "balanced"/"quality" can stall.
+    mode: str = "speed"
     enabled: bool = False
 
 

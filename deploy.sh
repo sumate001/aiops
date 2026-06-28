@@ -3,6 +3,7 @@
 #
 #   bash deploy.sh           # install (if needed) + start everything
 #   bash deploy.sh --start   # skip install, just (re)start services
+#   bash deploy.sh --update  # after `git pull`: refresh deps + frontend, restart
 #   bash deploy.sh --stop    # stop all services started by this script
 #   bash deploy.sh --status  # show health of every service
 #
@@ -257,6 +258,27 @@ stop_all() {
   fi
 }
 
+# ── Update ──────────────────────────────────────────────────────────────────
+# Run after `git pull`: reinstall Python deps, rebuild the frontend, then
+# restart everything. Does NOT touch perplexica-src/ (Vane is a separate repo)
+# or config.yaml / the SQLite DB.
+update_all() {
+  [[ -x "$VENV/bin/python" ]] || die "no virtualenv at $VENV — run 'bash deploy.sh' first"
+  PYTHON="$VENV/bin/python"
+
+  log "[1/3] refreshing Python dependencies"
+  "$VENV/bin/pip" install -q -r requirements.txt
+  [ -f log-ml/requirements.txt ] && "$VENV/bin/pip" install -q -r log-ml/requirements.txt
+
+  log "[2/3] rebuilding frontend"
+  ( cd frontend && npm install && npm run build )
+
+  log "[3/3] restarting services"
+  stop_all
+  check_prereqs
+  start_all
+}
+
 # ── Status ──────────────────────────────────────────────────────────────────
 status_all() {
   printf "\n${c_info}=== Service status ===${c_off}\n"
@@ -274,6 +296,7 @@ case "${1:-}" in
   --stop)   stop_all ;;
   --status) status_all ;;
   --start)  check_prereqs; start_all ;;
+  --update) update_all ;;
   ""|--all) check_prereqs; install_all; start_all ;;
-  *) die "unknown option '$1' (use: --start | --stop | --status | --all)" ;;
+  *) die "unknown option '$1' (use: --start | --update | --stop | --status | --all)" ;;
 esac

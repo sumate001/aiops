@@ -5,6 +5,8 @@ A2 — Perplexica client for external knowledge enrichment
 
 import asyncio
 import logging
+import re
+
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -125,22 +127,48 @@ async def _ensure_chat_provider(
         return None
 
 
+# Drop quoted strings, hex/ids, timestamps and SQL/path noise that derail web
+# search (a raw error line with a SELECT or a 0x… id returns zero results).
+_QUERY_NOISE = re.compile(
+    r"""["'`]                         # quotes
+        | 0x[0-9a-f]+                  # hex ids
+        | \b\d{4}-\d{2}-\d{2}t[\d:.]+z?\b   # iso timestamps
+        | \b[0-9a-f]{8,}\b            # long hex/uuid chunks
+        | \b\d{3,}\b                  # long bare numbers (ports/pids/counts)
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _clean_error(msg: str) -> str:
+    """Reduce a raw error line to a short, searchable keyword phrase."""
+    text = _QUERY_NOISE.sub(" ", msg.lower())
+    text = re.sub(r"[^a-z0-9 ]+", " ", text)
+    words = [w for w in text.split() if len(w) > 1]
+    return " ".join(words[:8])
+
+
 def build_query(
     top_frame: str | None,
     top_keywords: list[str],
     top_error_msgs: list[str],
     host: str,
 ) -> str:
+    """Build a clean, natural web-search query. Keeps it concise (frame +
+    keywords + a de-noised error phrase) so the search model actually searches
+    instead of answering from memory."""
     parts: list[str] = []
     if top_frame:
-        parts.append(f"POS system {top_frame.lower()} issue")
+        parts.append(top_frame.lower())
     if top_keywords:
         parts.append(" ".join(top_keywords[:3]))
     if top_error_msgs:
-        parts.append(f'"{top_error_msgs[0][:120]}"')
+        err = _clean_error(top_error_msgs[0])
+        if err:
+            parts.append(err)
     if not parts:
-        parts.append(f"POS server {host} troubleshooting")
-    return " ".join(parts) + " root cause fix"
+        parts.append(host)
+    return " ".join(parts) + " troubleshooting"
 
 
 async def _do_search(
@@ -152,6 +180,7 @@ async def _do_search(
     chat_provider: str = "ollama",
     chat_base_url: str = "http://localhost:11434",
     chat_api_key: str | None = None,
+    mode: str = "speed",
 ) -> dict | None:
     async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10, read=timeout, write=30)) as client:
         chat_provider_id = await _ensure_chat_provider(
@@ -171,7 +200,7 @@ async def _do_search(
         payload = {
             "chatModel": {"providerId": chat_provider_id, "key": chat_model},
             "embeddingModel": {"providerId": embed_provider_id, "key": embed_key},
-            "optimizationMode": "speed",
+            "optimizationMode": mode,
             "sources": ["web"],
             "query": query,
             "history": [],
@@ -200,11 +229,12 @@ async def search(
     chat_provider: str = "ollama",
     chat_base_url: str = "http://localhost:11434",
     chat_api_key: str | None = None,
+    mode: str = "speed",
 ) -> dict | None:
     try:
         return await asyncio.wait_for(
             _do_search(query, base_url, chat_model, embedding_model, timeout,
-                       chat_provider, chat_base_url, chat_api_key),
+                       chat_provider, chat_base_url, chat_api_key, mode),
             timeout=timeout,
         )
     except asyncio.TimeoutError:
