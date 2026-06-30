@@ -53,11 +53,18 @@ def _breached(value: float, thr: MetricThreshold) -> str | None:
 
 
 def _score(value: float, thr: MetricThreshold) -> float:
-    """Normalize how far past warn the value is, into 0..1 (saturating at critical)."""
-    span = thr.critical - thr.warn
+    """Normalize how far past warn the value is, into 0..1 (saturating at critical).
+    Works for both directions: for "below" thresholds critical < warn, so the
+    span and the distance-past-warn are computed with the sign flipped."""
+    if thr.direction == "below":
+        span = thr.warn - thr.critical
+        past = thr.warn - value
+    else:
+        span = thr.critical - thr.warn
+        past = value - thr.warn
     if span == 0:
         return 1.0
-    ratio = (value - thr.warn) / span if thr.direction == "above" else (thr.warn - value) / span
+    ratio = past / span
     return round(min(1.0, max(0.0, 0.5 + 0.5 * ratio)), 3)
 
 
