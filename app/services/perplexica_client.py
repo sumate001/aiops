@@ -244,3 +244,28 @@ async def search(
     except Exception as exc:
         logger.warning("Perplexica error: %s — %r", type(exc).__name__, str(exc)[:200])
     return None
+
+
+async def warm_up() -> None:
+    """Fire one throwaway A2 search at startup so the first real request isn't
+    paying the cold-start cost: it loads Perplexica's local embedding model into
+    RAM and primes the chat/embedding provider-id caches in this process.
+    Fully best-effort — failures are logged and swallowed, never block boot."""
+    from app.config import config, PERPLEXICA_TIMEOUT  # local import: avoid cycle
+
+    if not config.perplexica.enabled:
+        return
+    px = config.llm.resolve("perplexica")
+    logger.info("A2 warm-up — priming Perplexica embeddings + provider caches")
+    result = await search(
+        query="aiops warmup",
+        base_url=config.perplexica.base_url,
+        chat_model=px.model,
+        embedding_model=config.perplexica.embedding_model,
+        timeout=PERPLEXICA_TIMEOUT,
+        chat_provider=px.provider,
+        chat_base_url=px.base_url,
+        chat_api_key=px.api_key,
+        mode=config.perplexica.mode,
+    )
+    logger.info("A2 warm-up %s", "done" if result is not None else "skipped (Perplexica not ready)")

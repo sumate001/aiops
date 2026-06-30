@@ -166,6 +166,11 @@ Vane (A2) เรียกโมเดล chat แบบ **strict `json_schema`**
 - `perplexica.mode` (Vane optimizationMode): default **`speed`** = เสถียร + ได้ sources;
   `balanced`/`quality` ให้คำตอบลึกกว่าแต่บนโมเดลฟรี Groq อาจค้างจาก tool-use loop
 - `perplexica.timeout`: default `90s` (speed mode ตอบ ~20s/host)
+- **Warm-up อัตโนมัติตอน boot**: backend ยิง A2 search เปล่า 1 ครั้งตอน start (background,
+  ไม่ block health) เพื่อโหลด embedding model + prime provider cache — กัน request แรก
+  ได้ `0 sources` จาก cold start (ดู `perplexica_client.warm_up()` + `app/main.py` lifespan)
+- ⚠️ **SearXNG ต้องเปิด `format: json`** ไม่งั้นได้ `403 Forbidden` → A2 ค้างจน timeout +
+  ได้ 0 sources — `deploy.sh` เปิดให้อัตโนมัติแล้ว (ดูขั้น SearXNG ด้านล่าง)
 
 ### Local Development (manual / alternative)
 

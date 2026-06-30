@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -9,6 +10,7 @@ from fastapi.responses import JSONResponse, Response
 from app.config import config
 from app.routers import analyze, health, ingest
 from app.routers import config_router, results_router
+from app.services import perplexica_client
 from app.services.baseline_store import init_db
 from app.services.result_store import init_result_table
 
@@ -31,6 +33,10 @@ async def lifespan(app: FastAPI):
         config.aiops_ml.base_url,
         config.aiops_ml.enabled,
     )
+    # Prime A2 (Perplexica) in the background so the first ingest doesn't eat the
+    # embedding cold-start. Non-blocking: readiness/health come up immediately.
+    if config.perplexica.enabled:
+        asyncio.create_task(perplexica_client.warm_up())
     yield
 
 

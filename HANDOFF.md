@@ -2,6 +2,30 @@
 
 สรุปสถานะเพื่อไปทำต่อบนเครื่องอื่น
 
+---
+
+## 🆕 รอบ 2026-06-30 — Metrics ingestion + A2/SearXNG fix (branch `feat/godeye-metrics-ingestion`)
+
+**1. GodEye metrics ingestion (ใหม่)** — เดิม entry `type="metric"` ถูกทิ้งทั้งหมด
+- รับผ่าน `/ingest` ช่องเดียวกับ log → แปลงเป็น `AnomalyScore` (current_value/baseline_mean/predicted_breach_at)
+- threshold ที่ `analysis.metric_thresholds` (cpu/memory/disk/load/latency/error_rate/temperature)
+- ไฟล์: `app/services/metric_analyzer.py` (ใหม่), `godeyes_adapter.transform_metric()`, `app/models/request.py` (`MetricSample`), `analyze.py` (union log+metric hosts), `app/config.py` (`MetricThreshold`)
+- **status escalation** (best practice): metric `high`→critical, `medium`→warning floor ไม่ให้คะแนนเฉลี่ยกลบ breach (`log_processor.escalate_status/worse_status`)
+- ดู `docs/godeye-integration.md` (ขา 1b)
+
+**2. A2 ค้าง/ช้า — เจอ root cause จริง: SearXNG `format=json` ปิด → 403 Forbidden**
+- Perplexica research โยน unhandledRejection → `/api/search` ค้างจน 480s timeout → ได้ 0 sources
+- แก้: `deploy.sh` `ensure_searxng_json()` (idempotent, รันทั้งตอน create + start container เดิม) — guard เดิมบั๊กไม่เคยเปิด json
+- หลังแก้: A2 ~8-12s/host ได้ web sources จริง → ลด `perplexica.timeout` 480s→90s
+
+**3. A2 warm-up ตอน boot** — `perplexica_client.warm_up()` ยิง search เปล่า 1 ครั้งใน lifespan (background, ไม่ block) โหลด embedding + prime provider cache → request แรกไม่ได้ 0 sources จาก cold start
+
+**4. cleanup** — ลบ `perplexica.chat_model` ที่ตายแล้ว (A2 chat มาจาก `llm.perplexica` stage), unify embedding default → `Xenova/all-MiniLM-L6-v2`, แก้ score normalization ของ threshold ทิศ `below` (disk_free ฯลฯ)
+
+> verify เต็ม pipeline จริง: 3-host (log+metric) เสร็จ ~84s, ทุก host ได้ A2 sources, metrics→anomaly→health→synthesis ครบ
+
+---
+
 ## สถานะ pipeline ล่าสุด
 
 | Stage | สถานะ | หมายเหตุ |
