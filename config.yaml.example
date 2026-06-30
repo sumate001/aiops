@@ -21,7 +21,7 @@ log_ml:
 
 perplexica:
   base_url: "http://localhost:3001"   # A2 Perplexica/Vane (SearXNG + AI synthesis)
-  chat_model: "gemma4:e4b"            # legacy (embedding-side); chat model มาจาก llm.perplexica
+  # หมายเหตุ: chat model ของ A2 ตั้งที่ llm.perplexica (stage override) ด้านล่าง — ไม่ใช่ตรงนี้
   embedding_model: "Xenova/all-MiniLM-L6-v2"   # Transformers (local, ในตัว Vane) ไม่ต้องพึ่ง Ollama
   mode: "speed"     # Vane optimizationMode — speed = เสถียร + ได้ web sources บนโมเดลฟรี
                     # (balanced/quality อาจค้างจาก tool-use loop บน Groq free models)

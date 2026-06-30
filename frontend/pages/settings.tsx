@@ -14,7 +14,7 @@ type StageCfg = {
 type ConfigData = {
   godeye: { callback_url: string | null; enabled: boolean };
   log_ml: { base_url: string; enabled: boolean };
-  perplexica: { base_url: string; enabled: boolean; chat_model: string; embedding_model: string };
+  perplexica: { base_url: string; enabled: boolean; embedding_model: string };
   aiops_ml: { base_url: string; enabled: boolean };
   llm: {
     enabled: boolean;
@@ -81,8 +81,7 @@ export default function Settings() {
     log_ml_base_url: "http://localhost:3050",
     perplexica_enabled: false,
     perplexica_base_url: "http://localhost:3001",
-    perplexica_chat_model: "gemma4:e4b",
-    perplexica_embedding_model: "nomic-embed-text:latest",
+    perplexica_embedding_model: "Xenova/all-MiniLM-L6-v2",
   });
 
   const [llm, setLlm] = useState<LlmForm>({
@@ -109,8 +108,7 @@ export default function Settings() {
           log_ml_base_url: data.log_ml.base_url,
           perplexica_enabled: data.perplexica.enabled,
           perplexica_base_url: data.perplexica.base_url,
-          perplexica_chat_model: data.perplexica.chat_model || "gemma4:e4b",
-          perplexica_embedding_model: data.perplexica.embedding_model || "nomic-embed-text:latest",
+          perplexica_embedding_model: data.perplexica.embedding_model || "Xenova/all-MiniLM-L6-v2",
         });
         const l = data.llm;
         const stage = (s: StageCfg): StageForm => ({

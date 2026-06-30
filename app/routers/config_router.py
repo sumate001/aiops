@@ -41,8 +41,8 @@ class ConfigUpdate(BaseModel):
     log_ml_base_url: str = "http://localhost:3050"
     perplexica_enabled: bool = False
     perplexica_base_url: str = "http://localhost:3001"
-    perplexica_chat_model: str = "gemma4:e4b"
-    perplexica_embedding_model: str = "nomic-embed-text:latest"
+    # A2 chat model lives under llm.perplexica (stage override), not here.
+    perplexica_embedding_model: str = "Xenova/all-MiniLM-L6-v2"
     llm: LLMUpdate = LLMUpdate()
 
 
@@ -61,7 +61,6 @@ async def get_config() -> dict:
         "perplexica": {
             "base_url": config.perplexica.base_url,
             "enabled": config.perplexica.enabled,
-            "chat_model": config.perplexica.chat_model,
             "embedding_model": config.perplexica.embedding_model,
         },
         "aiops_ml": {
@@ -157,7 +156,6 @@ async def update_config(body: ConfigUpdate) -> dict:
         data.setdefault("perplexica", {})
         data["perplexica"]["enabled"] = body.perplexica_enabled
         data["perplexica"]["base_url"] = body.perplexica_base_url
-        data["perplexica"]["chat_model"] = body.perplexica_chat_model
         data["perplexica"]["embedding_model"] = body.perplexica_embedding_model
 
         llm = data.setdefault("llm", {})
@@ -189,7 +187,6 @@ async def update_config(body: ConfigUpdate) -> dict:
         os.environ["LOG_ML_ENABLED"] = "true" if body.log_ml_enabled else "false"
         os.environ["PERPLEXICA_BASE_URL"] = body.perplexica_base_url
         os.environ["PERPLEXICA_ENABLED"] = "true" if body.perplexica_enabled else "false"
-        os.environ["PERPLEXICA_CHAT_MODEL"] = body.perplexica_chat_model
         os.environ["LLM_ENABLED"] = "true" if body.llm.enabled else "false"
         os.environ["LLM_PROVIDER"] = body.llm.provider
         os.environ["LLM_BASE_URL"] = body.llm.base_url
