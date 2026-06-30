@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from fastapi import APIRouter, HTTPException
 
 from app.config import config, OLLAMA_TIMEOUT, LLM_TIMEOUT, AIOPS_ML_TIMEOUT, LOG_ML_TIMEOUT, PERPLEXICA_TIMEOUT
-from app.models.request import AnalyzeRequest, LogEntry
+from app.models.request import AnalyzeRequest, LogEntry, MetricSample
 from app.models.response import (
     AnalyzeResponse,
     AnomalyScore,
@@ -27,6 +27,7 @@ from app.services import mirofish
 from app.services import synthesizer
 from app.services import perplexica_client
 from app.services import metrics
+from app.services import metric_analyzer
 from app.services.result_store import save_result
 from app.services.aiops_ml import KNOWN_PROFILES
 from app.knowledge.pos import extract_signals_from_messages
@@ -37,9 +38,11 @@ from app.services.log_processor import (
     compute_host_health_score,
     compute_overall_health_score,
     compute_top_errors,
+    escalate_status,
     filter_entries,
     group_by_host,
     score_to_status,
+    worse_status,
 )
 
 router = APIRouter()
@@ -51,6 +54,7 @@ logger = logging.getLogger(__name__)
 class _HostState:
     hostname: str
     entries: list[LogEntry]
+    metric_samples: list[MetricSample]
     window_from: str
     window_to: str
     predict_result: dict | None
@@ -86,8 +90,14 @@ class _HostState:
 # ── Phase 1: A1 — Rule-based scoring + IF (no LLM, run all hosts in parallel) ──
 async def _phase1_a1(st: _HostState) -> None:
     entries = st.entries
-    st.service_profile = next((e.service_profile for e in entries if e.service_profile), None)
-    st.criticality = next((e.criticality for e in entries if e.criticality), None)
+    st.service_profile = (
+        next((e.service_profile for e in entries if e.service_profile), None)
+        or next((m.service_profile for m in st.metric_samples if m.service_profile), None)
+    )
+    st.criticality = (
+        next((e.criticality for e in entries if e.criticality), None)
+        or next((m.criticality for m in st.metric_samples if m.criticality), None)
+    )
 
     st.error_count = sum(1 for e in entries if e.severity_number >= 17)
     st.warn_count = sum(1 for e in entries if 13 <= e.severity_number <= 16)
@@ -101,6 +111,10 @@ async def _phase1_a1(st: _HostState) -> None:
                 st.anomalies.append(AnomalyScore(**a))
             except Exception:
                 logger.warning("Could not parse anomaly: %s", a)
+
+    # Metric threshold anomalies (GodEye numeric metrics → AnomalyScore)
+    if st.metric_samples:
+        st.anomalies.extend(metric_analyzer.evaluate_host(st.metric_samples))
 
     # health score (before IF)
     anomaly_scores = [a.score for a in st.anomalies]
@@ -163,6 +177,10 @@ async def _phase1_a1(st: _HostState) -> None:
             st.health_score = compute_host_health_score(
                 st.error_count, st.warn_count, len(entries), anomaly_scores
             )
+
+    # Final status: score-based, then floored by worst anomaly severity so a
+    # breached threshold (metric or IF) cannot be diluted down to "ok".
+    st.status = escalate_status(score_to_status(st.health_score), st.anomalies)
 
     # Trend + prediction (no LLM)
     st.trend = analyze_trend(st.hostname)
@@ -305,18 +323,25 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     if req.window.from_ >= req.window.to:
         raise HTTPException(status_code=400, detail={"error": "window.from must be before window.to"})
 
+    if not req.entries and not req.metrics:
+        raise HTTPException(status_code=400, detail={"error": "no log entries or metrics provided"})
+
     entries = filter_entries(req.entries)
     host_groups = group_by_host(entries)
+    metric_groups = metric_analyzer.group_by_host(req.metrics)
+
+    # Hosts may appear in logs, metrics, or both (preserve first-seen order).
+    all_hosts = list(dict.fromkeys([*host_groups.keys(), *metric_groups.keys()]))
 
     window_from = req.window.from_.isoformat().replace("+00:00", "Z")
     window_to = req.window.to.isoformat().replace("+00:00", "Z")
 
     # aiops-ml predict (disabled by default)
-    predict_results: dict[str, dict | None] = {h: None for h in host_groups}
+    predict_results: dict[str, dict | None] = {h: None for h in all_hosts}
     aiops_ml_used = False
     if config.aiops_ml.enabled:
         async def _predict_host(hostname: str) -> tuple[str, dict | None]:
-            host_entries = host_groups[hostname]
+            host_entries = host_groups.get(hostname, [])
             profile = next((e.service_profile for e in host_entries if e.service_profile), None)
             if profile and profile in KNOWN_PROFILES:
                 result = await ml_client.predict(
@@ -325,7 +350,7 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
                 )
                 return hostname, result
             return hostname, None
-        pairs = await asyncio.gather(*[_predict_host(h) for h in host_groups])
+        pairs = await asyncio.gather(*[_predict_host(h) for h in all_hosts])
         for hostname, result in pairs:
             predict_results[hostname] = result
             if result:
@@ -335,12 +360,13 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     states = [
         _HostState(
             hostname=h,
-            entries=host_groups[h],
+            entries=host_groups.get(h, []),
+            metric_samples=metric_groups.get(h, []),
             window_from=window_from,
             window_to=window_to,
             predict_result=predict_results[h],
         )
-        for h in host_groups
+        for h in all_hosts
     ]
 
     # ── Phase 1: A1 — all hosts in parallel (fast) ──
@@ -371,6 +397,9 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
 
     overall_score = compute_overall_health_score(host_analyses)
     overall_status = score_to_status(overall_score)
+    # Don't let an averaged overall score hide a host that's already critical.
+    for ha in host_analyses:
+        overall_status = worse_status(overall_status, ha.status)
     summary = build_summary(host_analyses)
 
     metrics.analyze_requests_total.inc()

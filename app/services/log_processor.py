@@ -58,13 +58,16 @@ def compute_host_health_score(
     anomaly_scores: list[float],
 ) -> float:
     cfg = config.analysis.health_score
+    anomaly_penalty = max(anomaly_scores, default=0.0) * 30
+
     if entry_count == 0:
-        return cfg.score_ceiling
+        # No log entries (e.g. metrics-only host): score solely on anomalies.
+        score = cfg.score_ceiling - anomaly_penalty
+        return round(max(cfg.score_floor, min(cfg.score_ceiling, score)), 2)
 
     deduction = (
         (error_count * cfg.critical_weight + warn_count * cfg.warn_weight) / entry_count * 100
     )
-    anomaly_penalty = max(anomaly_scores, default=0.0) * 30
     score = cfg.score_ceiling - deduction - anomaly_penalty
     return round(max(cfg.score_floor, min(cfg.score_ceiling, score)), 2)
 
@@ -75,6 +78,27 @@ def score_to_status(score: float) -> str:
     if score >= 40:
         return "warning"
     return "critical"
+
+
+# Status ordering, worst-last — used to take the worse of two statuses.
+_STATUS_RANK = {"ok": 0, "warning": 1, "critical": 2}
+
+
+def worse_status(a: str, b: str) -> str:
+    return a if _STATUS_RANK.get(a, 0) >= _STATUS_RANK.get(b, 0) else b
+
+
+def escalate_status(base_status: str, anomalies: list) -> str:
+    """Best practice: a breached threshold drives status directly, regardless of
+    the (averaged) health score. A `high`/`critical` anomaly floors the host at
+    critical; a `medium`/`warn` one floors it at warning. Prevents alert
+    dilution where one severe metric is washed out by an otherwise calm host."""
+    severities = {getattr(a, "severity", "") for a in anomalies}
+    if {"high", "critical"} & severities:
+        return worse_status(base_status, "critical")
+    if {"medium", "warn"} & severities:
+        return worse_status(base_status, "warning")
+    return base_status
 
 
 def compute_overall_health_score(host_analyses: list[HostAnalysis]) -> float:

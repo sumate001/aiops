@@ -107,10 +107,34 @@ class HealthScoreConfig(BaseModel):
     score_ceiling: float = 100.0
 
 
+class MetricThreshold(BaseModel):
+    warn: float
+    critical: float
+    direction: str = "above"   # "above" = breach when value >= threshold; "below" = value <= threshold
+    unit: str | None = None
+
+
+# Default thresholds, keyed by a case-insensitive substring of the metric name
+# (e.g. key "cpu" matches "cpu_usage", "node_cpu_utilization").
+_DEFAULT_METRIC_THRESHOLDS: dict[str, MetricThreshold] = {
+    "cpu": MetricThreshold(warn=80, critical=95, direction="above", unit="percent"),
+    "memory": MetricThreshold(warn=85, critical=95, direction="above", unit="percent"),
+    "mem_": MetricThreshold(warn=85, critical=95, direction="above", unit="percent"),
+    "disk_usage": MetricThreshold(warn=85, critical=95, direction="above", unit="percent"),
+    "disk_used": MetricThreshold(warn=85, critical=95, direction="above", unit="percent"),
+    "disk_free": MetricThreshold(warn=15, critical=5, direction="below", unit="percent"),
+    "load": MetricThreshold(warn=4, critical=8, direction="above"),
+    "latency": MetricThreshold(warn=500, critical=1000, direction="above", unit="ms"),
+    "error_rate": MetricThreshold(warn=1, critical=5, direction="above", unit="percent"),
+    "temperature": MetricThreshold(warn=70, critical=85, direction="above", unit="celsius"),
+}
+
+
 class AnalysisConfig(BaseModel):
     max_log_entries: int = 500
     severity_filter: str = "warn"
     health_score: HealthScoreConfig = HealthScoreConfig()
+    metric_thresholds: dict[str, MetricThreshold] = _DEFAULT_METRIC_THRESHOLDS
 
 
 class AppConfig(BaseModel):

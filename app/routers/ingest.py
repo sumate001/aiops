@@ -95,8 +95,9 @@ async def ingest(request: Request) -> AnalyzeResponse:
         raise HTTPException(status_code=400, detail={"error": str(exc)})
 
     logger.info(
-        "Ingesting %d entries (from %d raw) tenant=%s",
+        "Ingesting %d log entries + %d metrics (from %d raw) tenant=%s",
         len(analyze_dict["entries"]),
+        len(analyze_dict.get("metrics", [])),
         len(raw_entries),
         tenant_id,
     )
@@ -114,6 +115,7 @@ async def ingest(request: Request) -> AnalyzeResponse:
                 "status": "accepted",
                 "request_id": request_id,
                 "entries": len(analyze_dict["entries"]),
+                "metrics": len(analyze_dict.get("metrics", [])),
                 "callback_url": callback_url,
             },
         )

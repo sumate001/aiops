@@ -142,13 +142,38 @@ class TestBuildAnalyzeRequest:
         assert len(result["entries"]) == 1
         assert result["window"]["from"] == result["window"]["to"]  # single entry
 
-    def test_skips_non_log_types(self):
-        metric_entry = {"type": "metric", "asset_id": "123"}
+    def test_skips_invalid_metric_types(self):
+        metric_entry = {"type": "metric", "asset_id": "123"}  # no time/name/value
         result = build_analyze_request([SAMPLE_LOG, metric_entry])
         assert len(result["entries"]) == 1
+        assert result["metrics"] == []
+
+    def test_extracts_valid_metrics(self):
+        metric = {
+            "type": "metric", "_time": "2026-05-20T10:00:00Z",
+            "host": "pos-db-01", "metric": "cpu_usage", "value": 92.5, "unit": "percent",
+            "region": "th",
+        }
+        result = build_analyze_request([SAMPLE_LOG, metric])
+        assert len(result["entries"]) == 1
+        assert len(result["metrics"]) == 1
+        m = result["metrics"][0]
+        assert m["name"] == "cpu_usage"
+        assert m["value"] == 92.5
+        assert m["host"] == "pos-db-01"
+        assert m["labels"]["region"] == "th"
+
+    def test_metrics_only_request(self):
+        metric = {
+            "type": "metric", "_time": "2026-05-20T10:00:00Z",
+            "host": "pos-db-01", "name": "memory_usage", "value": 88,
+        }
+        result = build_analyze_request([metric])
+        assert result["entries"] == []
+        assert len(result["metrics"]) == 1
 
     def test_raises_when_no_valid_entries(self):
-        with pytest.raises(ValueError, match="No valid log entries"):
+        with pytest.raises(ValueError, match="No valid log or metric entries"):
             build_analyze_request([{"type": "metric"}])
 
     def test_explicit_window_overrides_derived(self):

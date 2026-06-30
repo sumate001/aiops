@@ -147,6 +147,48 @@ def transform_entry(raw: dict[str, Any], default_tenant_id: str = "internal") ->
     }
 
 
+_METRIC_NAME_KEYS = ("metric", "name", "metric_name", "_metric")
+_METRIC_VALUE_KEYS = ("value", "_value", "metric_value")
+_METRIC_KNOWN_KEYS = {
+    "type", "asset_id", "hostname", "host", "service", "tenant_id",
+    "_time", "time", "timestamp", "EventReceivedTime",
+    "unit", "service_profile", "criticality",
+    *_METRIC_NAME_KEYS, *_METRIC_VALUE_KEYS,
+}
+
+
+def transform_metric(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """Convert a single GodEye metric entry into a canonical MetricSample dict.
+    Returns None if it is missing a timestamp, name, or numeric value."""
+    time_str = _resolve_time(raw)
+    if not time_str:
+        return None
+
+    name = next((str(raw[k]) for k in _METRIC_NAME_KEYS if raw.get(k)), None)
+    if not name:
+        return None
+
+    value_raw = next((raw[k] for k in _METRIC_VALUE_KEYS if raw.get(k) is not None), None)
+    try:
+        value = float(value_raw)
+    except (ValueError, TypeError):
+        logger.debug("Skipping metric %s with non-numeric value: %r", name, value_raw)
+        return None
+
+    labels = {k: v for k, v in raw.items() if k not in _METRIC_KNOWN_KEYS}
+    return {
+        "time": time_str,
+        "host": _resolve_host(raw),
+        "name": name,
+        "value": value,
+        "unit": raw.get("unit"),
+        "service": raw.get("service"),
+        "service_profile": raw.get("service_profile"),
+        "criticality": raw.get("criticality"),
+        "labels": labels,
+    }
+
+
 def derive_window(entries: list[dict[str, Any]]) -> tuple[str, str]:
     """Compute min/max _time from canonical entries (already have 'time' key)."""
     times: list[datetime] = []
@@ -178,10 +220,19 @@ def build_analyze_request(
     """Convert a list of GodEyes raw log dicts into an AnalyzeRequest-compatible dict."""
 
     canonical: list[dict[str, Any]] = []
+    metrics: list[dict[str, Any]] = []
     skipped = 0
     for raw in raw_entries:
-        # Only process log entries (skip metrics / export_meta)
-        if raw.get("type") not in (None, "log"):
+        etype = raw.get("type")
+        if etype == "metric":
+            m = transform_metric(raw)
+            if m is None:
+                skipped += 1
+            else:
+                metrics.append(m)
+            continue
+        # Logs: type "log" or unset. Skip anything else (e.g. export_meta).
+        if etype not in (None, "log"):
             continue
         tenant = raw.get("tenant_id") or tenant_id
         transformed = transform_entry(raw, default_tenant_id=tenant)
@@ -191,13 +242,13 @@ def build_analyze_request(
         canonical.append(transformed)
 
     if skipped:
-        logger.info("Skipped %d entries with missing timestamp", skipped)
+        logger.info("Skipped %d entries with missing timestamp/value", skipped)
 
-    if not canonical:
-        raise ValueError("No valid log entries after transformation")
+    if not canonical and not metrics:
+        raise ValueError("No valid log or metric entries after transformation")
 
     if window_from is None or window_to is None:
-        derived_from, derived_to = derive_window(canonical)
+        derived_from, derived_to = derive_window(canonical + metrics)
         window_from = window_from or derived_from
         window_to = window_to or derived_to
 
@@ -206,4 +257,5 @@ def build_analyze_request(
         "tenant_id": tenant_id,
         "window": {"from": window_from, "to": window_to},
         "entries": canonical,
+        "metrics": metrics,
     }

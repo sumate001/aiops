@@ -64,3 +64,13 @@ analysis:
     warn_weight: 1.0
     score_floor: 0.0
     score_ceiling: 100.0
+  # เกณฑ์ของ metric ที่ GodEye ส่งมา (entry type="metric") → กลายเป็น anomaly
+  # key = substring ของชื่อ metric (case-insensitive, match อันที่ยาว/เจาะจงสุด)
+  # direction: above = breach เมื่อ value >= threshold, below = value <= threshold
+  # ถ้าไม่กำหนด จะใช้ค่า default ในโค้ด (cpu/memory/disk/load/latency/error_rate/temperature)
+  metric_thresholds:
+    cpu:        { warn: 80, critical: 95, direction: above, unit: percent }
+    memory:     { warn: 85, critical: 95, direction: above, unit: percent }
+    disk_usage: { warn: 85, critical: 95, direction: above, unit: percent }
+    disk_free:  { warn: 15, critical: 5,  direction: below, unit: percent }
+    latency:    { warn: 500, critical: 1000, direction: above, unit: ms }
