@@ -205,24 +205,36 @@ install_all() {
 }
 
 # ── Start ───────────────────────────────────────────────────────────────────
+# Perplexica queries SearXNG with format=json, which the stock image disables
+# (→ 403 Forbidden → A2 hangs until timeout with zero sources). Idempotently
+# ensure the json output format is enabled, then restart the container to apply.
+# Keyed on the literal "json" so it's a no-op once set, and safe on a container
+# whose settings.yml already has a `search:` section without json.
+ensure_searxng_json() {
+  [ "${SEARXNG_ENABLED:-1}" = 1 ] || return 0
+  if $DOCKER exec aiops-searxng grep -q 'json' /etc/searxng/settings.yml 2>/dev/null; then
+    return 0
+  fi
+  $DOCKER exec aiops-searxng sh -c \
+    "printf '\nsearch:\n  formats:\n    - html\n    - json\n' >> /etc/searxng/settings.yml" \
+    && $DOCKER restart aiops-searxng >/dev/null && sleep 4 \
+    && ok "SearXNG json format enabled" || warn "could not enable SearXNG json format"
+}
+
 start_all() {
   # SearXNG (docker) — skipped gracefully when Docker isn't available.
   if [ "${SEARXNG_ENABLED:-1}" != 1 ]; then
     warn "SearXNG skipped (no Docker) — A2 external search disabled, rest of stack runs"
   elif $DOCKER ps --format '{{.Names}}' | grep -q '^aiops-searxng$'; then
-    ok "SearXNG already running"
+    ok "SearXNG already running"; ensure_searxng_json
   elif $DOCKER ps -a --format '{{.Names}}' | grep -q '^aiops-searxng$'; then
     log "starting existing SearXNG container"; $DOCKER start aiops-searxng >/dev/null
+    sleep 4; ensure_searxng_json
   else
     log "creating SearXNG container on :$PORT_SEARXNG"
     $DOCKER run -d --name aiops-searxng -p "${PORT_SEARXNG}:8080" \
       -e SEARXNG_SECRET="$(openssl rand -hex 32)" searxng/searxng:latest >/dev/null
-    # Perplexica queries SearXNG with format=json, which the default settings
-    # disable (→ 403, zero sources). Enable it, then restart to apply.
-    sleep 4
-    $DOCKER exec aiops-searxng sh -c \
-      "grep -q '^search:' /etc/searxng/settings.yml || printf '\nsearch:\n  formats:\n    - html\n    - json\n' >> /etc/searxng/settings.yml" \
-      && $DOCKER restart aiops-searxng >/dev/null && ok "SearXNG json format enabled"
+    sleep 4; ensure_searxng_json
   fi
 
   start_svc log-ml "$PORT_LOG_ML" log-ml.log \
