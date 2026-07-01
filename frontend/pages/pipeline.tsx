@@ -20,7 +20,7 @@ type Trend = {
   baseline_comparison?: string; anomaly_types: string[];
 };
 type Prediction = {
-  risk_level: string; confidence: number;
+  risk_level: string; self_confidence: number;
   estimated_incident_in?: string; contributing_signals: string[];
   recommendation: string; matched_fingerprint?: string;
 };
@@ -395,7 +395,7 @@ export default function Pipeline() {
                       </div>
                       <div className="flex gap-3">
                         <div className="bg-gray-800 rounded-lg p-3 flex-1">
-                          <p className="text-[10px] text-gray-600 uppercase mb-1">Confidence</p>
+                          <p className="text-[10px] text-gray-600 uppercase mb-1">AA Overall Confidence</p>
                           <p className={`text-2xl font-bold ${
                             host.synthesis.confidence > 0.7 ? "text-green-400" :
                             host.synthesis.confidence > 0.4 ? "text-yellow-400" : "text-red-400"
@@ -491,7 +491,7 @@ export default function Pipeline() {
                         <div className={`rounded-lg p-3 border ${riskColor(host.prediction.risk_level)}`}>
                           <div className="flex items-center justify-between mb-1">
                             <p className="text-xs font-bold uppercase tracking-wide">{host.prediction.risk_level} risk</p>
-                            <span className="text-xs">{pct(host.prediction.confidence)} confidence</span>
+                            <span className="text-xs">{pct(host.prediction.self_confidence)} predictor self-confidence</span>
                           </div>
                           {host.prediction.estimated_incident_in && (
                             <p className="text-sm font-bold">⏱ Incident in ~{host.prediction.estimated_incident_in}</p>

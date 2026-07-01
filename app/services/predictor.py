@@ -42,6 +42,30 @@ def _linear_slope(xs: list[float], ys: list[float]) -> float:
     return (n * sxy - sx * sy) / denom if denom != 0 else 0.0
 
 
+def _weighted_slope(xs: list[float], ys: list[float], decay: float = 0.9) -> float:
+    """Exponentially recency-weighted least-squares slope — the most recent
+    window gets weight 1.0, each older window decays by `decay`."""
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    weights = [decay ** (n - 1 - i) for i in range(n)]
+    sw = sum(weights)
+    wx = sum(w * x for w, x in zip(weights, xs))
+    wy = sum(w * y for w, y in zip(weights, ys))
+    mean_x, mean_y = wx / sw, wy / sw
+    num = sum(w * (x - mean_x) * (y - mean_y) for w, x, y in zip(weights, xs, ys))
+    den = sum(w * (x - mean_x) ** 2 for w, x in zip(weights, xs))
+    return num / den if den != 0 else 0.0
+
+
+def _std(values: list[float]) -> float:
+    n = len(values)
+    if n < 2:
+        return 0.0
+    mean = sum(values) / n
+    return math.sqrt(sum((v - mean) ** 2 for v in values) / n)
+
+
 def extract_signals(top_error_msgs: list[str]) -> dict[str, int]:
     """ใช้ POS signal patterns จับ signal จาก log messages"""
     return extract_signals_from_messages(top_error_msgs)
@@ -63,9 +87,12 @@ def analyze_trend(host: str) -> TrendInfo:
     error_rates  = [w["error_rate"]   for w in windows]
     health_scores= [w["health_score"] for w in windows]
 
-    slope = _linear_slope(xs, error_rates)
+    slope = _weighted_slope(xs, error_rates)
 
-    SLOPE_THRESH = 0.02
+    # Adaptive threshold: noisy hosts naturally have a higher std(error_rate),
+    # so a fixed 0.02 flags them as "rising" too often. Floor still applies for
+    # very quiet hosts where even a small slope is meaningful.
+    SLOPE_THRESH = max(0.02, 1.5 * _std(error_rates))
     if slope > SLOPE_THRESH:
         direction = "rising"
     elif slope < -SLOPE_THRESH:
@@ -148,12 +175,21 @@ def generate_prediction(
     error_count: int,
     warn_count: int,
     entry_count: int,
+    anomalies: list[dict] | None = None,
     top_error_msgs: list[str] | None = None,
 ) -> PredictionInfo:
 
+    anomalies = anomalies or []
     top_error_msgs = top_error_msgs or []
     signals: list[str] = []
     risk = 0
+
+    # ── A1 anomalies (rule + IF) ─────────────────────────────────────────────
+    if_anomalies = [a for a in anomalies if a.get("metric") == "isolation_forest"]
+    if if_anomalies:
+        a = if_anomalies[0]
+        signals.append(f"A1-IF flagged: score={a['score']:.2f} severity={a['severity']}")
+        risk += 15 if a["severity"] == "high" else 8
 
     # ── ขั้น 5: Noise check ──────────────────────────────────────────────────
     noise_reduction = 0
@@ -232,11 +268,15 @@ def generate_prediction(
     if matched_fp:
         matched_fingerprint = matched_fp["name"]
         signals.append(f"⚠ Matches POS fingerprint: {matched_fp['name']} — {matched_fp['description']}")
-        risk += 20
 
-        # บอก signal types ที่ match
-        active = [s for s in matched_fp["required_signals"] + matched_fp["supporting_signals"]
-                  if all_signal_counts.get(s, 0) > 0]
+        # Proportional score: a fingerprint with only its required signal active
+        # shouldn't score the same as one where every signal (required +
+        # supporting) fired.
+        fp_signals = matched_fp["required_signals"] + matched_fp["supporting_signals"]
+        active = [s for s in fp_signals if all_signal_counts.get(s, 0) > 0]
+        active_ratio = len(active) / len(fp_signals) if fp_signals else 0.0
+        risk += round(20 * active_ratio)
+
         if active:
             signals.append(f"  Active signals: {', '.join(active)}")
 
@@ -279,6 +319,15 @@ def generate_prediction(
         xs_h = [(_ts(w["window_from"]) - t0) / 3600 for w in sorted_w]
         hs   = [w["health_score"] for w in sorted_w]
         health_slope = _linear_slope(xs_h, hs)
+
+        # Acceleration guard: cascading failures don't degrade linearly — if the
+        # last 3 windows are falling >2x steeper than the overall trend, use
+        # that steeper (more urgent) slope for the ETA instead.
+        if len(sorted_w) >= 3:
+            recent_slope = _linear_slope(xs_h[-3:], hs[-3:])
+            if recent_slope < 0 and health_slope < 0 and abs(recent_slope) > abs(health_slope) * 2:
+                health_slope = recent_slope
+
         if health_slope < -1.0:
             target = 40.0 if current_health > 40 else 0.0
             hrs = (current_health - target) / abs(health_slope)
@@ -296,7 +345,8 @@ def generate_prediction(
 
     return PredictionInfo(
         risk_level=risk_level,
-        confidence=confidence,
+        risk_score=float(risk),
+        self_confidence=confidence,
         estimated_incident_in=estimated_incident_in,
         contributing_signals=signals,
         recommendation=recs[risk_level],

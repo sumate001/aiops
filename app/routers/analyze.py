@@ -121,27 +121,8 @@ async def _phase1_a1(st: _HostState) -> None:
     st.health_score = compute_host_health_score(st.error_count, st.warn_count, len(entries), anomaly_scores)
     st.status = score_to_status(st.health_score)
 
-    # Persist window stats
     all_msgs = [e.msg for e in entries if e.msg]
     st.sig = extract_signals_from_messages(all_msgs)
-    save_window_stat(WindowStat(
-        host=st.hostname,
-        tenant_id="internal",
-        window_from=st.window_from,
-        window_to=st.window_to,
-        entry_count=len(entries),
-        error_count=st.error_count,
-        warn_count=st.warn_count,
-        health_score=st.health_score,
-        top_error_msgs=st.top_error_msgs,
-        crash_count=st.sig.get("crash", 0),
-        auth_fail_count=st.sig.get("auth_fail", 0),
-        payment_fail_count=st.sig.get("payment_fail", 0),
-        network_err_count=st.sig.get("network_err", 0),
-        db_err_count=st.sig.get("db_err", 0),
-        hardware_err_count=st.sig.get("hardware_err", 0),
-        app_crash_count=st.sig.get("app_crash", 0),
-    ))
 
     # log-ml Isolation Forest score
     if config.log_ml.enabled:
@@ -182,6 +163,27 @@ async def _phase1_a1(st: _HostState) -> None:
     # breached threshold (metric or IF) cannot be diluted down to "ok".
     st.status = escalate_status(score_to_status(st.health_score), st.anomalies)
 
+    # Persist window stats — after IF adjustment so health_score reflects the
+    # final post-IF value, not the pre-IF estimate.
+    save_window_stat(WindowStat(
+        host=st.hostname,
+        tenant_id="internal",
+        window_from=st.window_from,
+        window_to=st.window_to,
+        entry_count=len(entries),
+        error_count=st.error_count,
+        warn_count=st.warn_count,
+        health_score=st.health_score,
+        top_error_msgs=st.top_error_msgs,
+        crash_count=st.sig.get("crash", 0),
+        auth_fail_count=st.sig.get("auth_fail", 0),
+        payment_fail_count=st.sig.get("payment_fail", 0),
+        network_err_count=st.sig.get("network_err", 0),
+        db_err_count=st.sig.get("db_err", 0),
+        hardware_err_count=st.sig.get("hardware_err", 0),
+        app_crash_count=st.sig.get("app_crash", 0),
+    ))
+
     # Trend + prediction (no LLM)
     st.trend = analyze_trend(st.hostname)
     st.prediction = generate_prediction(
@@ -191,6 +193,7 @@ async def _phase1_a1(st: _HostState) -> None:
         error_count=st.error_count,
         warn_count=st.warn_count,
         entry_count=len(entries),
+        anomalies=[a.model_dump() for a in st.anomalies],
         top_error_msgs=st.top_error_msgs,
     )
 
@@ -224,6 +227,8 @@ async def _phase3_aa(st: _HostState) -> None:
         health_score=st.health_score,
         anomalies=[a.model_dump() for a in st.anomalies],
         mirofish_frames=st.mirofish_frames,
+        trend=st.trend.model_dump() if st.trend else None,
+        prediction=st.prediction.model_dump() if st.prediction else None,
         use_llm=config.llm.enabled,
         ollama_generate=partial(llm_client.generate, provider=sy.provider, api_key=sy.api_key),
         model=sy.model,

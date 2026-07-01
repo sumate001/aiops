@@ -11,7 +11,13 @@ import json
 import logging
 from dataclasses import dataclass, field
 
+from app.knowledge.pos import POS_FAILURE_FINGERPRINTS
+
 logger = logging.getLogger(__name__)
+
+_FINGERPRINT_FRAME: dict[str, str] = {
+    fp["name"]: fp["related_frame"] for fp in POS_FAILURE_FINGERPRINTS if fp.get("related_frame")
+}
 
 # ─── Frame playbooks (rule-based fix steps) ──────────────────────────────────
 
@@ -78,6 +84,8 @@ def _rule_synthesis(
     health_score: float,
     anomalies: list[dict],
     mirofish_frames: list[dict],
+    trend: dict | None = None,
+    prediction: dict | None = None,
 ) -> SynthesisResult:
     """
     Pure-rule synthesis — no LLM, instant.
@@ -127,12 +135,30 @@ def _rule_synthesis(
             f" relevance {secondary['relevance']:.0%}"
         )
 
+    # Predictor signal (P1/P2): surface risk/ETA even if IF/MiroFish are quiet
+    matched_fingerprint = (prediction or {}).get("matched_fingerprint")
+    if prediction and prediction.get("risk_level") in ("high", "critical"):
+        eta = prediction.get("estimated_incident_in") or "timing unknown"
+        chain.append(f"[Predictor] {prediction['risk_level']} risk — {eta}")
+    if matched_fingerprint:
+        chain.append(f"[Predictor] Matched failure fingerprint: {matched_fingerprint}")
+
+    # P9: reconcile MiroFish top frame with predictor fingerprint's related frame
+    if matched_fingerprint and top:
+        related_frame = _FINGERPRINT_FRAME.get(matched_fingerprint)
+        if related_frame and related_frame != top["frame"]:
+            chain.append(
+                f"⚠ Predictor fingerprint suggests {related_frame} but MiroFish top frame "
+                f"is {top['frame']} — evidence conflict, review manually"
+            )
+
     if not chain:
         chain.append(f"Health degraded to {health_score:.0f}/100 — no dominant signal identified")
 
-    # Confidence: weighted from MiroFish relevance + anomaly strength
+    # Confidence: MiroFish relevance + anomaly strength + predictor self-confidence
     top_relevance = top["relevance"] if top else 0.0
-    confidence = min(1.0, top_relevance * 0.6 + max_anomaly_score * 0.4)
+    predictor_conf = (prediction or {}).get("self_confidence", 0.0)
+    confidence = min(1.0, top_relevance * 0.45 + max_anomaly_score * 0.30 + predictor_conf * 0.25)
 
     # Fix steps from top frame playbook
     fix_steps = _FRAME_PLAYBOOK.get(top["frame"], _DEFAULT_PLAYBOOK) if top else _DEFAULT_PLAYBOOK
@@ -156,6 +182,8 @@ def _build_judge_prompt(
     anomalies: list[dict],
     mirofish_frames: list[dict],
     rule_result: SynthesisResult,
+    trend: dict | None = None,
+    prediction: dict | None = None,
 ) -> str:
     relevant_frames = [f for f in mirofish_frames if f["relevance"] > 0]
     frames_block = "\n".join(
@@ -169,6 +197,17 @@ def _build_judge_prompt(
     )
     rule_chain_block = "\n".join(f"  - {c}" for c in rule_result.root_cause_chain)
 
+    predictor_block = "  (no prediction)"
+    if prediction:
+        predictor_block = (
+            f"  risk_level={prediction.get('risk_level')} "
+            f"self_confidence={prediction.get('self_confidence')} "
+            f"eta={prediction.get('estimated_incident_in')} "
+            f"fingerprint={prediction.get('matched_fingerprint')}"
+        )
+        if trend:
+            predictor_block += f"\n  trend={trend.get('direction')} slope/hr={trend.get('slope_per_hour')}"
+
     return f"""You are an AIOps LLM Judge for a POS (Point-of-Sale) retail system.
 Analyze the evidence and synthesize a concise root-cause assessment.
 
@@ -180,6 +219,9 @@ Anomaly detectors (A1):
 
 Multi-frame analysis (A3 MiroFish):
 {frames_block or '  (no relevant frames)'}
+
+Predictor (trend+risk):
+{predictor_block}
 
 Rule-based chain (baseline):
 {rule_chain_block}
@@ -205,6 +247,8 @@ async def synthesize(
     health_score: float,
     anomalies: list[dict],
     mirofish_frames: list[dict],
+    trend: dict | None = None,
+    prediction: dict | None = None,
     ollama_generate=None,
     model: str = "",
     base_url: str = "",
@@ -217,12 +261,14 @@ async def synthesize(
     Always runs rule-based synthesis first (fallback).
     If use_llm=True and ollama_generate is provided, enriches with LLM judge.
     """
-    rule_result = _rule_synthesis(host, health_score, anomalies, mirofish_frames)
+    rule_result = _rule_synthesis(host, health_score, anomalies, mirofish_frames, trend, prediction)
 
     if not (use_llm and ollama_generate and model):
         return rule_result
 
-    prompt = _build_judge_prompt(host, health_score, anomalies, mirofish_frames, rule_result)
+    prompt = _build_judge_prompt(
+        host, health_score, anomalies, mirofish_frames, rule_result, trend, prediction
+    )
     try:
         raw = await ollama_generate(
             prompt=prompt,

@@ -46,6 +46,40 @@ class ConfigUpdate(BaseModel):
     llm: LLMUpdate = LLMUpdate()
 
 
+class FeedbackSubmit(BaseModel):
+    host: str
+    tenant_id: str = "internal"
+    window_from: str
+    actual_outcome: str  # "incident" | "no_incident"
+    incident_type: str | None = None
+    predicted_risk_level: str = "unknown"
+
+
+@router.post("/feedback")
+async def submit_feedback(body: FeedbackSubmit) -> dict:
+    """Ground-truth feedback hook for predictor backtesting.
+
+    Manual (operator) or future incident-management webhook calls this to record
+    whether a prediction window actually turned into an incident, feeding
+    godeyes_prediction_outcome_total for Grafana precision panels.
+    """
+    if body.actual_outcome not in ("incident", "no_incident"):
+        raise HTTPException(status_code=400, detail={"error": "actual_outcome must be 'incident' or 'no_incident'"})
+
+    from app.services.metrics import record_prediction_outcome
+    record_prediction_outcome(
+        host=body.host,
+        tenant_id=body.tenant_id,
+        predicted_risk_level=body.predicted_risk_level,
+        actual_outcome=body.actual_outcome,
+    )
+    logger.info(
+        "Feedback recorded — host=%s window_from=%s outcome=%s incident_type=%s",
+        body.host, body.window_from, body.actual_outcome, body.incident_type,
+    )
+    return {"status": "ok"}
+
+
 @router.get("/config")
 async def get_config() -> dict:
     from app.config import config

@@ -13,7 +13,9 @@ class TrendInfo(BaseModel):
 
 class PredictionInfo(BaseModel):
     risk_level: str                         # low | medium | high | critical
-    confidence: float                       # 0.0–1.0
+    risk_score: float = 0.0                 # 0-100 raw risk score behind risk_level
+    self_confidence: float                  # 0.0–1.0 — predictor's confidence in its own risk estimate
+                                             # (NOT overall confidence — see Synthesis.confidence for that)
     estimated_incident_in: str | None = None
     contributing_signals: list[str] = []
     recommendation: str = ""

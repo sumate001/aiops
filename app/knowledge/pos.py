@@ -24,6 +24,7 @@ POS_FAILURE_FINGERPRINTS: list[dict] = [
         "required_signals": ["db_err"],           # ต้องมี
         "supporting_signals": ["crash", "auth_fail"],  # เสริม confidence
         "multi_signal_threshold": 2,
+        "related_frame": "Database",
     },
     {
         "name": "Auth Failure Cascade",
@@ -32,6 +33,7 @@ POS_FAILURE_FINGERPRINTS: list[dict] = [
         "required_signals": ["auth_fail", "crash"],
         "supporting_signals": ["db_err"],
         "multi_signal_threshold": 2,
+        "related_frame": "Security",
     },
     {
         "name": "Network Failure",
@@ -40,6 +42,7 @@ POS_FAILURE_FINGERPRINTS: list[dict] = [
         "required_signals": ["network_err"],
         "supporting_signals": ["auth_fail"],
         "multi_signal_threshold": 1,
+        "related_frame": "Network",
     },
     {
         "name": "Memory Leak / Resource Exhaustion",
@@ -48,6 +51,7 @@ POS_FAILURE_FINGERPRINTS: list[dict] = [
         "required_signals": ["app_crash"],
         "supporting_signals": ["crash"],
         "multi_signal_threshold": 1,
+        "related_frame": "Software",
     },
     {
         "name": "Payment Processing Failure",
@@ -56,6 +60,7 @@ POS_FAILURE_FINGERPRINTS: list[dict] = [
         "required_signals": ["payment_fail"],
         "supporting_signals": ["network_err", "db_err"],
         "multi_signal_threshold": 1,
+        "related_frame": "Network",
     },
     {
         "name": "Hardware / Peripheral Failure",
@@ -64,6 +69,7 @@ POS_FAILURE_FINGERPRINTS: list[dict] = [
         "required_signals": ["hardware_err"],
         "supporting_signals": ["app_crash"],
         "multi_signal_threshold": 1,
+        "related_frame": "Hardware",
     },
     {
         "name": "Service Crash Loop",
@@ -72,6 +78,7 @@ POS_FAILURE_FINGERPRINTS: list[dict] = [
         "required_signals": ["crash"],
         "supporting_signals": ["auth_fail", "db_err", "app_crash"],
         "multi_signal_threshold": 1,
+        "related_frame": "Software",
     },
 ]
 

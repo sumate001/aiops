@@ -70,6 +70,40 @@ synthesis_confidence = Gauge(
     ["host", "tenant_id", "top_frame"],
 )
 
+# ── Predictor ───────────────────────────────────────────────────────────────────
+prediction_risk = Gauge(
+    "godeyes_prediction_risk_score",
+    "Predictor risk score (0-100)",
+    ["host", "tenant_id"],
+)
+
+prediction_self_confidence = Gauge(
+    "godeyes_prediction_self_confidence",
+    "Predictor self-confidence in its own risk estimate (0-1)",
+    ["host", "tenant_id"],
+)
+
+prediction_risk_level = Gauge(
+    "godeyes_prediction_risk_level",
+    "Predictor risk level encoded: low=1 medium=2 high=3 critical=4",
+    ["host", "tenant_id"],
+)
+
+trend_slope = Gauge(
+    "godeyes_trend_slope_per_hour",
+    "Error rate trend slope per hour",
+    ["host", "tenant_id"],
+)
+
+# For backtest: whether a prediction lined up with a real incident (fed by /api/feedback)
+prediction_outcome_total = Counter(
+    "godeyes_prediction_outcome_total",
+    "Prediction vs actual outcome (for backtest)",
+    ["host", "tenant_id", "predicted_risk_level", "actual_outcome"],  # actual_outcome: incident | no_incident
+)
+
+_RISK_LEVEL_CODE = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+
 # ── Request counters ───────────────────────────────────────────────────────────
 analyze_requests_total = Counter(
     "godeyes_analyze_requests_total",
@@ -120,3 +154,25 @@ def record_analysis(tenant_id: str, hosts: list, overall_score: float, overall_s
                 tenant_id=tenant_id,
                 top_frame=h.synthesis.top_frame or "none",
             ).set(h.synthesis.confidence)
+
+        if h.prediction:
+            prediction_risk.labels(**labels).set(h.prediction.risk_score)
+            prediction_self_confidence.labels(**labels).set(h.prediction.self_confidence)
+            prediction_risk_level.labels(**labels).set(
+                _RISK_LEVEL_CODE.get(h.prediction.risk_level, 0)
+            )
+
+        if h.trend:
+            trend_slope.labels(**labels).set(h.trend.slope_per_hour)
+
+
+def record_prediction_outcome(
+    host: str, tenant_id: str, predicted_risk_level: str, actual_outcome: str
+) -> None:
+    """Increment the backtest counter — called from POST /api/feedback."""
+    prediction_outcome_total.labels(
+        host=host,
+        tenant_id=tenant_id,
+        predicted_risk_level=predicted_risk_level,
+        actual_outcome=actual_outcome,
+    ).inc()
