@@ -151,6 +151,19 @@ curl -s -X POST http://localhost:8200/ingest -H "Content-Type: application/json"
 }' | python3 -m json.tool
 ```
 
+### ⚠️ Troubleshooting: "ส่ง log+metric แต่ aiops วิเคราะห์แต่ log"
+
+ยืนยันด้วย curl ข้างบนแล้วว่า pipeline ฝั่ง aiops วิเคราะห์ metric ได้ปกติเมื่อ payload ถูกต้อง — ถ้า GodEye
+ส่งมาแล้วเห็นแต่ log ในผลลัพธ์ ให้เช็ค `Ingesting N log entries + M metrics (from T raw)` ใน server log ก่อน:
+
+- **`M metrics = 0` และ `T raw` เท่ากับ log count พอดี** → GodEye **ไม่ได้ส่ง metric entry มาเลย**
+  ไม่ใช่ aiops ทิ้ง ที่พบบ่อยสุดคือ GodEye ส่ง metric entry แต่ **ไม่มีฟิลด์ `"type": "metric"`**
+  (adapter จะตีความเป็น log แล้ว skip ทิ้งเงียบๆ เพราะไม่มี `severity_text`/`message`)
+- **`T raw` มากกว่า `log + metrics`** → มี entry ที่ parse ไม่ผ่านทั้งสองแบบ (ดู log บรรทัด
+  `Skipped N entries with missing timestamp/value` และเช็คว่า field `_time`/`metric`/`value` ตรงชื่อไหม)
+- metric ที่ parse ผ่านแต่ **ไม่ match key ใดใน `metric_thresholds`** จะไม่ปรากฏเป็น anomaly เลย
+  (เงียบเหมือนกัน) — เช็คว่าใช้ default key (cpu/memory/disk_usage/…) หรือ config เอง
+
 ---
 
 ## ขา 2 — aiops ส่งผลกลับ GodEye: callback (เฉพาะโหมด ASYNC)
