@@ -60,6 +60,7 @@ class Synthesis(BaseModel):
     top_frame: str | None = None
     top_frame_lens: str | None = None
     anomaly_methods: list[str] = []
+    reasoning: str | None = None
 
 
 class TopError(BaseModel):

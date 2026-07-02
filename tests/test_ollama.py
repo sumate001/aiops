@@ -20,7 +20,7 @@ class TestParseJsonResponse:
         assert result["affected_metrics"] == []
         assert result["suggested_actions"] == []
 
-    def test_truncates_long_plain_text(self):
+    def test_preserves_long_plain_text(self):
         text = "x" * 1000
         result = parse_json_response(text)
-        assert len(result["summary"]) == 500
+        assert len(result["summary"]) == 1000

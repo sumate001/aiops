@@ -58,6 +58,10 @@ class _HostState:
     window_from: str
     window_to: str
     predict_result: dict | None
+    # Count of ALL log entries for this host before the severity filter — the
+    # health-score denominator. Using the filtered count (warn+ only) makes the
+    # error/warn ratio 100% by construction and pins health at 0.
+    total_entry_count: int = 0
 
     # A1 outputs
     service_profile: str | None = None
@@ -77,7 +81,8 @@ class _HostState:
     mirofish_frames: list[dict] = field(default_factory=list)
 
     # AA outputs
-    synth_result: synthesizer.SynthesisResult | None = None
+    rule_result: synthesizer.SynthesisResult | None = None  # rule-only pass (drives A2 query)
+    synth_result: synthesizer.SynthesisResult | None = None  # final (LLM judge if enabled)
 
     # A2 outputs
     enrichment: PerplexicaEnrichment | None = None
@@ -116,9 +121,10 @@ async def _phase1_a1(st: _HostState) -> None:
     if st.metric_samples:
         st.anomalies.extend(metric_analyzer.evaluate_host(st.metric_samples))
 
-    # health score (before IF)
+    # health score (before IF) — denominator is the pre-filter entry total
+    denom = max(st.total_entry_count, len(entries))
     anomaly_scores = [a.score for a in st.anomalies]
-    st.health_score = compute_host_health_score(st.error_count, st.warn_count, len(entries), anomaly_scores)
+    st.health_score = compute_host_health_score(st.error_count, st.warn_count, denom, anomaly_scores)
     st.status = score_to_status(st.health_score)
 
     all_msgs = [e.msg for e in entries if e.msg]
@@ -156,7 +162,7 @@ async def _phase1_a1(st: _HostState) -> None:
             # recompute with IF included
             anomaly_scores = [a.score for a in st.anomalies]
             st.health_score = compute_host_health_score(
-                st.error_count, st.warn_count, len(entries), anomaly_scores
+                st.error_count, st.warn_count, denom, anomaly_scores
             )
 
     # Final status: score-based, then floored by worst anomaly severity so a
@@ -219,25 +225,19 @@ async def _phase2_a3(st: _HostState) -> None:
     logger.info("A3 done — host=%s frames=%d", st.hostname, len(st.mirofish_frames))
 
 
-# ── Phase 3: AA Synthesizer (fast, rule-based, run all hosts in parallel) ──
-async def _phase3_aa(st: _HostState) -> None:
-    sy = config.llm.resolve("synthesizer")
-    st.synth_result = await synthesizer.synthesize(
+# ── Phase 3: AA rule pass (fast, no LLM, run all hosts in parallel) ──
+# Runs before A2 because its `top_frame` drives the A2 search query, and the
+# final LLM judge (phase 5) needs A2's answer available as evidence.
+async def _phase3_aa_rule(st: _HostState) -> None:
+    st.rule_result = synthesizer.synthesize_rule(
         host=st.hostname,
         health_score=st.health_score,
         anomalies=[a.model_dump() for a in st.anomalies],
         mirofish_frames=st.mirofish_frames,
         trend=st.trend.model_dump() if st.trend else None,
         prediction=st.prediction.model_dump() if st.prediction else None,
-        use_llm=config.llm.enabled,
-        ollama_generate=partial(llm_client.generate, provider=sy.provider, api_key=sy.api_key),
-        model=sy.model,
-        base_url=sy.base_url,
-        timeout=LLM_TIMEOUT,
-        temperature=config.llm.temperature,
     )
-    logger.info("AA done — host=%s top_frame=%s confidence=%.2f",
-                st.hostname, st.synth_result.top_frame, st.synth_result.confidence)
+    logger.info("AA rule done — host=%s top_frame=%s", st.hostname, st.rule_result.top_frame)
 
 
 # ── Phase 4: A2 — Perplexica (slow LLM, run one host at a time) ──
@@ -249,11 +249,16 @@ async def _phase4_a2(st: _HostState) -> None:
 
     top_kws = st.mirofish_frames[0]["top_keywords"] if st.mirofish_frames else []
     query = perplexica_client.build_query(
-        top_frame=st.synth_result.top_frame if st.synth_result else None,
+        top_frame=st.rule_result.top_frame if st.rule_result else None,
         top_keywords=top_kws,
         top_error_msgs=st.top_error_msgs,
         host=st.hostname,
+        # detector names (isolation_forest) aren't searchable system metrics
+        anomaly_metrics=[a.metric for a in st.anomalies if a.metric != "isolation_forest"],
     )
+    if not query:
+        logger.info("A2 skip — host=%s (no searchable evidence)", st.hostname)
+        return
     logger.info("A2 start — host=%s query=%s", st.hostname, query[:80])
 
     # Chat provider/model follow the resolved AI-judge stage (global default, or
@@ -282,6 +287,30 @@ async def _phase4_a2(st: _HostState) -> None:
         logger.info("A2 skip — host=%s (no result)", st.hostname)
 
 
+# ── Phase 5: AA LLM judge (run all hosts in parallel) — sees A2's answer ──
+async def _phase5_aa_llm(st: _HostState) -> None:
+    sy = config.llm.resolve("synthesizer")
+    st.synth_result = await synthesizer.synthesize(
+        host=st.hostname,
+        health_score=st.health_score,
+        anomalies=[a.model_dump() for a in st.anomalies],
+        mirofish_frames=st.mirofish_frames,
+        rule_result=st.rule_result,
+        trend=st.trend.model_dump() if st.trend else None,
+        prediction=st.prediction.model_dump() if st.prediction else None,
+        perplexica_answer=st.enrichment.answer if st.enrichment else None,
+        top_errors=[e.model_dump() for e in st.top_errors],
+        use_llm=config.llm.enabled,
+        ollama_generate=partial(llm_client.generate, provider=sy.provider, api_key=sy.api_key),
+        model=sy.model,
+        base_url=sy.base_url,
+        timeout=LLM_TIMEOUT,
+        temperature=config.llm.temperature,
+    )
+    logger.info("AA done — host=%s top_frame=%s confidence=%.2f",
+                st.hostname, st.synth_result.top_frame, st.synth_result.confidence)
+
+
 # ── Build final HostAnalysis from state ────────────────────────────────────
 def _build_host_analysis(st: _HostState) -> tuple[HostAnalysis, bool]:
     sr = st.synth_result
@@ -293,9 +322,10 @@ def _build_host_analysis(st: _HostState) -> tuple[HostAnalysis, bool]:
         top_frame=sr.top_frame,
         top_frame_lens=sr.top_frame_lens,
         anomaly_methods=sr.anomaly_methods,
+        reasoning=sr.reasoning,
     ) if sr else Synthesis(
         root_cause_chain=[], confidence=0.0, fix_steps=[], method="rule",
-        top_frame=None, top_frame_lens=None, anomaly_methods=[],
+        top_frame=None, top_frame_lens=None, anomaly_methods=[], reasoning=None,
     )
 
     # "ollama_used" really means "the LLM judge ran" — true when the synthesizer
@@ -333,6 +363,10 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
 
     entries = filter_entries(req.entries)
     host_groups = group_by_host(entries)
+    # Pre-filter totals per host (health-score denominator).
+    raw_totals: dict[str, int] = {}
+    for e in req.entries:
+        raw_totals[e.host] = raw_totals.get(e.host, 0) + 1
     metric_groups = metric_analyzer.group_by_host(req.metrics)
 
     # Hosts may appear in logs, metrics, or both (preserve first-seen order).
@@ -370,6 +404,7 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             window_from=window_from,
             window_to=window_to,
             predict_result=predict_results[h],
+            total_entry_count=raw_totals.get(h, 0),
         )
         for h in all_hosts
     ]
@@ -382,14 +417,18 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     logger.info("=== Phase 2: A3 MiroFish — %d hosts ===", len(states))
     await asyncio.gather(*[_phase2_a3(st) for st in states])
 
-    # ── Phase 3: AA Synthesizer — all hosts in parallel (fast) ──
-    logger.info("=== Phase 3: AA Synthesizer — %d hosts ===", len(states))
-    await asyncio.gather(*[_phase3_aa(st) for st in states])
+    # ── Phase 3: AA rule pass — all hosts in parallel (fast, no LLM) ──
+    logger.info("=== Phase 3: AA rule pass — %d hosts ===", len(states))
+    await asyncio.gather(*[_phase3_aa_rule(st) for st in states])
 
     # ── Phase 4: A2 Perplexica — one host at a time (slow LLM) ──
     logger.info("=== Phase 4: A2 Perplexica — sequential ===")
     for st in states:
         await _phase4_a2(st)
+
+    # ── Phase 5: AA LLM judge — all hosts in parallel, sees A2's answer ──
+    logger.info("=== Phase 5: AA LLM judge — %d hosts ===", len(states))
+    await asyncio.gather(*[_phase5_aa_llm(st) for st in states])
 
     # Assemble final response
     host_analyses: list[HostAnalysis] = []

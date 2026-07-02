@@ -160,8 +160,10 @@ def _build_frame_prompt(
         f"Top errors:\n{msgs_block}\n\n"
         f"Matched signals: {frame_score.signal_hits} | "
         f"Keywords: {', '.join(frame_score.top_keywords)}\n\n"
-        "In 1–2 sentences: what is the most likely root cause from your expert perspective? "
-        "Be specific. If not relevant to your domain, say 'No relevant signals for this frame.'"
+        "From your expert perspective, analyze the most likely root cause in 3-5 sentences: "
+        "name the mechanism, cite which errors/signals support it, note any secondary contributing "
+        "factors, and flag what evidence would confirm or rule it out. Be specific to this POS "
+        "system. If not relevant to your domain, say 'No relevant signals for this frame.'"
     )
 
 
@@ -190,7 +192,7 @@ async def _enrich_frame(
             timeout=timeout,
             temperature=temperature,
         )
-        frame_score.llm_insight = raw.strip()[:500] if raw else None
+        frame_score.llm_insight = raw.strip() if raw else None
     except Exception as exc:
         logger.debug("MiroFish LLM failed for frame %s: %s", frame.name, exc)
     return frame_score

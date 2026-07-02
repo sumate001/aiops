@@ -48,7 +48,7 @@ def parse_json_response(text: str) -> dict:
         return json.loads(clean)
     except json.JSONDecodeError:
         return {
-            "summary": text[:500],
+            "summary": text.strip(),
             "likely_causes": [],
             "affected_metrics": [],
             "suggested_actions": [],

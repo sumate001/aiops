@@ -77,6 +77,7 @@ class SynthesisResult:
     top_frame: str | None = None
     top_frame_lens: str | None = None
     anomaly_methods: list[str] = field(default_factory=list)
+    reasoning: str | None = None
 
 
 def _rule_synthesis(
@@ -184,18 +185,33 @@ def _build_judge_prompt(
     rule_result: SynthesisResult,
     trend: dict | None = None,
     prediction: dict | None = None,
+    perplexica_answer: str | None = None,
+    top_errors: list[dict] | None = None,
 ) -> str:
     relevant_frames = [f for f in mirofish_frames if f["relevance"] > 0]
-    frames_block = "\n".join(
-        f"  {f['frame']:10s} relevance={f['relevance']:.2f} "
-        f"kws=[{', '.join(f['top_keywords'][:3])}]"
-        for f in relevant_frames
+    frame_lines = []
+    for f in relevant_frames:
+        frame_lines.append(
+            f"  {f['frame']:10s} relevance={f['relevance']:.2f} "
+            f"kws=[{', '.join(f['top_keywords'][:3])}]"
+        )
+        if f.get("insight"):
+            frame_lines.append(f"    expert insight: {f['insight']}")
+    frames_block = "\n".join(frame_lines)
+    errors_block = "\n".join(
+        f"  - ({e['count']}x) {e['msg']}" for e in (top_errors or [])
     )
-    anomaly_block = "\n".join(
-        f"  {a['metric']:25s} score={a['score']:.2f} severity={a['severity']}"
-        for a in anomalies
-    )
+    anomaly_lines = []
+    for a in anomalies:
+        line = f"  {a['metric']:25s} score={a['score']:.2f} severity={a['severity']}"
+        if a.get("current_value") is not None:
+            line += f" current={a['current_value']}"
+            if a.get("baseline_mean") is not None:
+                line += f" baseline_mean={a['baseline_mean']}"
+        anomaly_lines.append(line)
+    anomaly_block = "\n".join(anomaly_lines)
     rule_chain_block = "\n".join(f"  - {c}" for c in rule_result.root_cause_chain)
+    research_block = f"  {perplexica_answer}" if perplexica_answer else "  (no web research)"
 
     predictor_block = "  (no prediction)"
     if prediction:
@@ -209,10 +225,16 @@ def _build_judge_prompt(
             predictor_block += f"\n  trend={trend.get('direction')} slope/hr={trend.get('slope_per_hour')}"
 
     return f"""You are an AIOps LLM Judge for a POS (Point-of-Sale) retail system.
-Analyze the evidence and synthesize a concise root-cause assessment.
+Your job is root-cause analysis: trace the observed symptoms back to the single
+most likely underlying cause. Distinguish cause from symptom — an error message
+is a symptom; the root cause is the condition that produced it (e.g. "gateway
+timeout" is a symptom; "WAN link saturation from backup job" is a cause).
 
 Host: {host}
 Health score: {health_score:.0f}/100
+
+Top error messages from logs (count x message):
+{errors_block or '  (none)'}
 
 Anomaly detectors (A1):
 {anomaly_block or '  (none)'}
@@ -226,29 +248,56 @@ Predictor (trend+risk):
 Rule-based chain (baseline):
 {rule_chain_block}
 
+Web research (A2 Perplexica — external context on this failure pattern):
+{research_block}
+
 Reply ONLY with a JSON object, no markdown fences:
 {{
-  "root_cause_chain": ["<step1>", "<step2>", ...],
+  "root_cause_chain": ["<step1: what happened -> why -> downstream effect>", "<step2>", ...],
   "confidence": <float 0.0-1.0>,
-  "fix_steps": ["<action1>", "<action2>", ...]
+  "fix_steps": ["<action1>", "<action2>", ...],
+  "reasoning": "<2-4 sentence explanation of how the evidence above points to this root cause, including what would confirm or rule it out>"
 }}
 
 Rules:
-- root_cause_chain: 2-4 items, most likely cause first, be specific to POS context
+- root_cause_chain: 3-5 items, most likely cause first, each item should state the causal
+  mechanism (not just a symptom) and be specific to POS context — reference the actual
+  errors/anomalies/frames/trend data above rather than generic phrasing
 - confidence: how certain you are given the evidence (0=guessing, 1=certain)
-- fix_steps: 3-5 concrete operator actions, ordered by priority
-- If evidence is weak, say so explicitly in root_cause_chain"""
+- fix_steps: 4-6 concrete operator actions, ordered by priority, each with enough detail to
+  act on immediately (what to check/run/restart, not just "investigate X")
+- reasoning: connect the dots explicitly between the evidence sections above and your conclusion
+- web research is external/general context, not specific telemetry from this host — use it to
+  corroborate or add detail to a cause already supported by the evidence above, never as the
+  sole basis for root_cause_chain
+- If evidence is weak, say so explicitly in root_cause_chain and reflect it in confidence"""
 
 
-# ─── Main entry point ─────────────────────────────────────────────────────────
+# ─── Main entry points ────────────────────────────────────────────────────────
 
-async def synthesize(
+def synthesize_rule(
     host: str,
     health_score: float,
     anomalies: list[dict],
     mirofish_frames: list[dict],
     trend: dict | None = None,
     prediction: dict | None = None,
+) -> SynthesisResult:
+    """Rule-only pass — instant, no LLM dependency. Its `top_frame` is used to
+    build the A2 Perplexica query, so this must run before A2."""
+    return _rule_synthesis(host, health_score, anomalies, mirofish_frames, trend, prediction)
+
+
+async def synthesize(
+    host: str,
+    health_score: float,
+    anomalies: list[dict],
+    mirofish_frames: list[dict],
+    rule_result: SynthesisResult,
+    trend: dict | None = None,
+    prediction: dict | None = None,
+    perplexica_answer: str | None = None,
+    top_errors: list[dict] | None = None,
     ollama_generate=None,
     model: str = "",
     base_url: str = "",
@@ -257,17 +306,17 @@ async def synthesize(
     use_llm: bool = False,
 ) -> SynthesisResult:
     """
-    AA Synthesizer entry point.
-    Always runs rule-based synthesis first (fallback).
-    If use_llm=True and ollama_generate is provided, enriches with LLM judge.
+    AA Synthesizer LLM judge pass. Takes the already-computed rule_result
+    (see synthesize_rule) as baseline/fallback, plus optional A2 web-research
+    answer, and asks the LLM to produce a richer root-cause assessment.
     """
-    rule_result = _rule_synthesis(host, health_score, anomalies, mirofish_frames, trend, prediction)
-
     if not (use_llm and ollama_generate and model):
         return rule_result
 
     prompt = _build_judge_prompt(
-        host, health_score, anomalies, mirofish_frames, rule_result, trend, prediction
+        host, health_score, anomalies, mirofish_frames, rule_result, trend, prediction,
+        perplexica_answer=perplexica_answer,
+        top_errors=top_errors,
     )
     try:
         raw = await ollama_generate(
@@ -286,6 +335,7 @@ async def synthesize(
             top_frame=rule_result.top_frame,
             top_frame_lens=rule_result.top_frame_lens,
             anomaly_methods=rule_result.anomaly_methods,
+            reasoning=parsed.get("reasoning"),
         )
     except Exception as exc:
         logger.warning("AA Synthesizer LLM failed for %s: %s — falling back to rule", host, exc)
