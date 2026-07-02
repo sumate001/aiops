@@ -6,10 +6,21 @@ A2 — Perplexica client for external knowledge enrichment
 import asyncio
 import logging
 import re
+import time
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# ── Search-result cache + upstream cooldown ─────────────────────────────────
+# GodEye streams windows continuously, so the same host produces a nearly
+# identical query every cycle. Without this, each ingest fans out one SearXNG
+# search per host back-to-back and the upstream engines (DuckDuckGo, Brave)
+# CAPTCHA/429-ban the instance.
+_CACHE_TTL = 6 * 3600          # reuse an answer for the same query for 6h
+_MIN_SEARCH_INTERVAL = 60.0    # at most one real upstream search per minute
+_result_cache: dict[str, tuple[float, dict]] = {}   # query → (fetched_at, result)
+_last_search_at: float = 0.0
 
 _provider_cache: dict[str, str] = {}   # base_url → ollama provider UUID
 # (perplexica base, chat provider id, chat base_url) → created chat provider UUID
@@ -153,10 +164,12 @@ def build_query(
     top_keywords: list[str],
     top_error_msgs: list[str],
     host: str,
+    anomaly_metrics: list[str] | None = None,
 ) -> str:
     """Build a clean, natural web-search query. Keeps it concise (frame +
     keywords + a de-noised error phrase) so the search model actually searches
-    instead of answering from memory."""
+    instead of answering from memory. Returns "" when there is no searchable
+    evidence (a hostname alone finds nothing useful) — callers should skip A2."""
     parts: list[str] = []
     if top_frame:
         parts.append(top_frame.lower())
@@ -166,8 +179,11 @@ def build_query(
         err = _clean_error(top_error_msgs[0])
         if err:
             parts.append(err)
+    if not parts and anomaly_metrics:
+        # Metrics-only window: search on the anomalous metric names instead.
+        parts.append(" ".join(m.replace("_", " ") for m in anomaly_metrics[:2]) + " high")
     if not parts:
-        parts.append(host)
+        return ""
     return " ".join(parts) + " troubleshooting"
 
 
@@ -217,7 +233,7 @@ async def _do_search(
             if s.get("metadata", {}).get("url")
         ]
         logger.info("Perplexica search OK: %d chars, %d sources", len(answer), len(sources))
-        return {"answer": answer[:2000], "sources": sources[:5], "query": query}
+        return {"answer": answer[:4000], "sources": sources[:5], "query": query}
 
 
 async def search(
@@ -231,12 +247,35 @@ async def search(
     chat_api_key: str | None = None,
     mode: str = "speed",
 ) -> dict | None:
+    global _last_search_at
+
+    cache_key = query.strip().lower()
+    now = time.monotonic()
+    cached = _result_cache.get(cache_key)
+    if cached and now - cached[0] < _CACHE_TTL:
+        logger.info("A2 cache hit (age %.0fs) for query: %s", now - cached[0], query[:80])
+        return cached[1]
+
+    # Cooldown: protect upstream engines from burst searches (one per host per
+    # ingest cycle adds up fast). Prefer a stale cached answer over nothing.
+    if now - _last_search_at < _MIN_SEARCH_INTERVAL:
+        if cached:
+            logger.info("A2 cooldown — serving stale cache for query: %s", query[:80])
+            return cached[1]
+        logger.info("A2 cooldown — skipping search (%.0fs since last) for query: %s",
+                    now - _last_search_at, query[:80])
+        return None
+
     try:
-        return await asyncio.wait_for(
+        _last_search_at = now
+        result = await asyncio.wait_for(
             _do_search(query, base_url, chat_model, embedding_model, timeout,
                        chat_provider, chat_base_url, chat_api_key, mode),
             timeout=timeout,
         )
+        if result and result.get("answer"):
+            _result_cache[cache_key] = (time.monotonic(), result)
+        return result
     except asyncio.TimeoutError:
         logger.warning("Perplexica timeout after %.0fs for query: %s", timeout, query[:80])
     except httpx.ConnectError:
@@ -269,3 +308,7 @@ async def warm_up() -> None:
         mode=config.perplexica.mode,
     )
     logger.info("A2 warm-up %s", "done" if result is not None else "skipped (Perplexica not ready)")
+    # Don't let the warm-up count toward the upstream cooldown — the first real
+    # analysis after boot should still be allowed to search.
+    global _last_search_at
+    _last_search_at = 0.0
