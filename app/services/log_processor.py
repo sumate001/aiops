@@ -1,3 +1,4 @@
+import re
 from collections import defaultdict
 from datetime import datetime
 
@@ -39,6 +40,14 @@ def compute_top_errors(entries: list[LogEntry], limit: int = 5) -> list[TopError
         if e.severity_number >= ERROR_MIN:
             counts[e.msg].append(e.time)
 
+    # No error-level messages: fall back to warn-level ones so downstream
+    # consumers (MiroFish, LLM judge, A2 query) still see the actual log text —
+    # on a warn-only stream these are the only evidence there is.
+    if not counts:
+        for e in entries:
+            if WARN_MIN <= e.severity_number <= WARN_MAX:
+                counts[e.msg].append(e.time)
+
     top = sorted(counts.items(), key=lambda x: len(x[1]), reverse=True)[:limit]
     return [
         TopError(
@@ -65,10 +74,13 @@ def compute_host_health_score(
         score = cfg.score_ceiling - anomaly_penalty
         return round(max(cfg.score_floor, min(cfg.score_ceiling, score)), 2)
 
-    deduction = (
-        (error_count * cfg.critical_weight + warn_count * cfg.warn_weight) / entry_count * 100
-    )
-    score = cfg.score_ceiling - deduction - anomaly_penalty
+    # Cap each severity's contribution: ingest streams are often pre-filtered
+    # to warn+ (e.g. GodEye), so the ratio saturates at 100% by construction.
+    # Warnings alone can only take a host into "warning" territory (-35);
+    # errors can push it to critical (-70). Anomalies stack on top.
+    error_ded = min(70.0, error_count * cfg.critical_weight / entry_count * 100)
+    warn_ded = min(35.0, warn_count * cfg.warn_weight / entry_count * 100)
+    score = cfg.score_ceiling - error_ded - warn_ded - anomaly_penalty
     return round(max(cfg.score_floor, min(cfg.score_ceiling, score)), 2)
 
 
@@ -113,6 +125,56 @@ def compute_overall_health_score(host_analyses: list[HostAnalysis]) -> float:
     return round(weighted_sum / weight_total, 2)
 
 
+# Markdown constructs that render as noise in the GodEye UI (plain text).
+_MD_NOISE = re.compile(
+    r"""```.*?```          # fenced code blocks
+      | ^\s{0,3}\#{1,6}\s* # heading markers
+      | ^\s*\|.*\|\s*$     # table rows
+      | ^\s*[-=*_]{3,}\s*$ # horizontal rules
+      | \*\*|__|`          # bold/emphasis/inline-code markers
+      | \[(\d+)\]          # citation refs like [1]
+    """,
+    re.MULTILINE | re.DOTALL | re.VERBOSE,
+)
+
+
+def _plain_excerpt(text: str, max_sentences: int = 3, max_chars: int = 400) -> str:
+    """Strip markdown and squeeze whitespace, keeping only the lead sentences —
+    for UI surfaces that render plain text."""
+    text = _MD_NOISE.sub(" ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    excerpt = " ".join(sentences[:max_sentences])
+    if len(excerpt) > max_chars:
+        excerpt = excerpt[:max_chars].rsplit(" ", 1)[0] + "…"
+    return excerpt
+
+
+def _describe_primary(primary: HostAnalysis, fallback_msg: str) -> str:
+    """Short, plain-text briefing on the primary host, preferring the AA
+    Synthesizer's LLM/rule root-cause chain and reasoning (specific,
+    evidence-based) over the raw top error message (a symptom, not a cause).
+    Rendered with newlines — the GodEye UI shows this as plain text, so no
+    markdown and no wall-of-text. Full detail stays in synthesis/enrichment."""
+    criticality_label = f" ({primary.criticality} tier)" if primary.criticality else ""
+    sr = primary.synthesis
+
+    if sr and sr.root_cause_chain:
+        # The GodEye UI collapses newlines, so keep everything inline:
+        # numbered chain steps and " | " between sections.
+        chain = "  ".join(f"{i}) {step}" for i, step in enumerate(sr.root_cause_chain, 1))
+        parts = [f"Primary issue on {primary.host}{criticality_label}: {chain}"]
+        if sr.reasoning:
+            parts.append(f"Why: {_plain_excerpt(sr.reasoning, max_sentences=2)}")
+        if primary.enrichment and primary.enrichment.answer:
+            parts.append(f"Research: {_plain_excerpt(primary.enrichment.answer, max_sentences=2, max_chars=300)}")
+        if sr.fix_steps:
+            parts.append(f"Recommended first step: {sr.fix_steps[0]}")
+        return " | ".join(parts)
+
+    return f"Primary issue: {fallback_msg} on {primary.host}{criticality_label}."
+
+
 def build_summary(host_analyses: list[HostAnalysis]) -> str:
     critical = [h for h in host_analyses if h.status == "critical"]
     warning = [h for h in host_analyses if h.status == "warning"]
@@ -123,11 +185,10 @@ def build_summary(host_analyses: list[HostAnalysis]) -> str:
     if critical:
         primary = critical[0]
         top_msg = primary.top_errors[0].msg if primary.top_errors else "unknown issue"
-        criticality_label = f" ({primary.criticality} tier)" if primary.criticality else ""
-        base += f" Primary issue: {top_msg} on {primary.host}{criticality_label}."
+        base += " | " + _describe_primary(primary, top_msg)
     elif warning:
         primary = warning[0]
         top_msg = primary.top_errors[0].msg if primary.top_errors else "degraded performance"
-        base += f" Primary issue: {top_msg} on {primary.host}."
+        base += " | " + _describe_primary(primary, top_msg)
 
     return base

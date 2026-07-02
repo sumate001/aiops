@@ -78,9 +78,10 @@ class TestHealthScore:
         assert score == 100.0
 
     def test_all_errors_deduction(self):
-        # 100 errors, 100 entries, critical_weight=2 → deduction = 200, score floored at 0
+        # 100 errors, 100 entries — error deduction is capped at 70 so a
+        # pre-filtered (error-only) stream can't zero the score by construction
         score = compute_host_health_score(100, 0, 100, [])
-        assert score == 0.0
+        assert score == 30.0
 
     def test_anomaly_penalty(self):
         score = compute_host_health_score(0, 0, 100, [1.0])

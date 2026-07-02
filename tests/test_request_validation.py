@@ -34,13 +34,15 @@ class TestAnalyzeRequest:
         )
         assert req.request_id is None
 
-    def test_empty_entries_raises(self):
-        with pytest.raises(ValidationError):
-            AnalyzeRequest(
-                tenant_id="t1",
-                window={"from": "2026-05-21T10:00:00Z", "to": "2026-05-21T10:05:00Z"},
-                entries=[],
-            )
+    def test_empty_entries_allowed_for_metrics_only(self):
+        # entries may be empty (metrics-only ingestion); the /analyze endpoint
+        # rejects requests where BOTH entries and metrics are empty.
+        req = AnalyzeRequest(
+            tenant_id="t1",
+            window={"from": "2026-05-21T10:00:00Z", "to": "2026-05-21T10:05:00Z"},
+            entries=[],
+        )
+        assert req.entries == []
 
     def test_missing_tenant_id_raises(self):
         with pytest.raises(ValidationError):

@@ -37,6 +37,25 @@ def _match_threshold(name: str) -> MetricThreshold | None:
     return best[1] if best else None
 
 
+# Metric-name suffixes that indicate raw counters/gauges (bytes, totals,
+# limits) — comparing those against percent thresholds produces nonsense
+# (e.g. system_memory_usage_bytes=2.6e9 "breaching" a 95-percent line).
+_NON_PERCENT_HINTS = ("_total", "_bytes", "_count", "_limit", "_seconds", "_switches")
+
+
+def _threshold_applies(name: str, sample_unit: str | None, value: float, thr: MetricThreshold) -> bool:
+    """Guard against unit mismatch between the metric and the threshold."""
+    if thr.unit == "percent":
+        if sample_unit and sample_unit.lower() not in ("percent", "%"):
+            return False
+        lname = name.lower()
+        if any(lname.endswith(h) or h in lname for h in _NON_PERCENT_HINTS):
+            return False
+        if not (0.0 <= value <= 100.0):
+            return False
+    return True
+
+
 def _breached(value: float, thr: MetricThreshold) -> str | None:
     """Return "high" (critical), "medium" (warn) or None."""
     if thr.direction == "below":
@@ -116,6 +135,9 @@ def evaluate_host(samples: list[MetricSample]) -> list[AnomalyScore]:
             continue
         series.sort(key=lambda s: s.time)
         current = series[-1].value
+        if not _threshold_applies(name, series[-1].unit, current, thr):
+            logger.debug("metric %s skipped — unit mismatch with threshold (value=%s)", name, current)
+            continue
         severity = _breached(current, thr)
         if severity is None:
             continue
