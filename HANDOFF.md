@@ -4,6 +4,36 @@
 
 ---
 
+## 🆕 รอบ 2026-07-02 — Root-cause depth + false-critical fixes (branch `feat/godeye-metrics-ingestion`)
+
+โจทย์: ผลวิเคราะห์ที่ส่งให้ GodEye "สั้นและตื้น" + ทุก host ออก critical หมด — ไล่จนเจอ 3 กลุ่มปัญหา:
+
+**1. LLM judge ไม่เคยเห็นหลักฐานจริง** (commit `f4fca97`)
+- แยก AA เป็น 2 pass: rule pass (phase 3, สร้าง A2 query) → LLM judge (phase 5, รันหลัง A2)
+- judge เห็น: ข้อความ error/warn จริง, MiroFish per-frame insight, ค่า metric (current/baseline),
+  rule chain, ผล A2 web research — เดิมเห็นแค่ชื่อ frame + ตัวเลข relevance
+- prompt เขียนใหม่เน้น cause-vs-symptom; เพิ่ม field `synthesis.reasoning`; เลิก truncate 500 chars
+
+**2. False criticals** (commit `7d8e158`)
+- metric threshold percent เคยถูกใช้กับ metric หน่วย bytes/counter (เช่น `system_memory_usage_bytes`
+  ถูกตีว่า "เกิน 95%") → เพิ่ม unit-mismatch guard ใน `metric_analyzer`
+- health score: GodEye ส่งเฉพาะ warn+ → ratio เดิมอิ่มตัวที่ 100% เสมอ → ใช้ยอด pre-filter
+  เป็นตัวหาร + cap deduction (warn -35, error -70, anomaly -30)
+- `compute_top_errors` fallback เป็นข้อความ warn เมื่อไม่มี error (ให้ judge มีหลักฐานเสมอ)
+
+**3. SearXNG โดน upstream แบน + summary อ่านไม่ได้** (commit `be465a1` + config นอก repo)
+- A2: cache คำตอบต่อ query 6h + cooldown 60s ระหว่าง search จริง; query ไม่ fallback เป็น
+  hostname/ชื่อ detector อีก (ไม่มีหลักฐาน → ข้าม A2)
+- SearXNG container: ปิด duckduckgo/brave/startpage (CAPTCHA/429), ใช้ mojeek/qwant —
+  **config อยู่ใน volume `/etc/searxng/settings.yml` ไม่ใช่ใน repo** (แก้ด้วย `docker exec -i`)
+- `summary` เป็น plain text บรรทัดเดียวคั่น ` | ` + ล้าง markdown (UI GodEye ยุบ newline);
+  รายละเอียดเต็มอยู่ใน `synthesis.*` / `enrichment.answer` (ฝั่ง GodEye จะไป render field พวกนี้เอง)
+
+verify กับ traffic จริงจาก GodEye: host warn-only ได้ warning/65 (เดิม critical/0) และ
+root_cause_chain ชี้ตัวจริง (beyla + bpf_probe_write_user + journal corruption) แทนประโยค generic
+
+---
+
 ## 🆕 รอบ 2026-06-30 — Metrics ingestion + A2/SearXNG fix (branch `feat/godeye-metrics-ingestion`)
 
 **1. GodEye metrics ingestion (ใหม่)** — เดิม entry `type="metric"` ถูกทิ้งทั้งหมด

@@ -1,7 +1,7 @@
 # Log-Analyzer — Developer Guide
 
 > **GodEye AIOps Platform** · Microservice สำหรับวิเคราะห์ log จาก POS ระบบ  
-> Last updated: 2026-05-21
+> Last updated: 2026-07-02
 
 ---
 
@@ -55,10 +55,10 @@ GodEyes Platform
 |-----------|-----------|
 | Web framework | FastAPI + Uvicorn (Python 3.12) |
 | Schema validation | Pydantic v2 |
-| Local LLM | Ollama (`qwen3.6:35b`) via httpx async |
+| LLM | gateway provider-agnostic (`app/services/llm.py`) — Ollama native หรือ OpenAI-compatible (Groq ฯลฯ) เลือกต่อ stage ได้ |
 | Baseline DB | SQLite (file: `log_analyzer.db`) |
-| Frontend dashboard | Tailwind CSS dark theme (single HTML file) |
-| Tests | pytest (53 tests) |
+| Frontend dashboard | Next.js (`frontend/`, port 3002) |
+| Tests | pytest (56 tests) |
 
 ---
 
@@ -81,11 +81,18 @@ log-analyzer/
 │   │   └── health.py            # GET /healthz — probe Ollama + aiops-ml
 │   │
 │   ├── services/
-│   │   ├── log_processor.py     # filter, group, health score, top errors
-│   │   ├── godeyes_adapter.py   # แปลง GodEyes format → canonical LogEntry
-│   │   ├── ollama.py            # async call Ollama, build_analysis_prompt
+│   │   ├── log_processor.py     # filter, group, health score (capped deductions), top errors (warn fallback), summary
+│   │   ├── godeyes_adapter.py   # แปลง GodEyes format → canonical LogEntry / MetricSample
+│   │   ├── metric_analyzer.py   # metric threshold check + unit-mismatch guard → AnomalyScore
+│   │   ├── mirofish.py          # A3 — 5-frame analysis + per-frame LLM insight
+│   │   ├── synthesizer.py       # AA — rule pass + LLM judge (root_cause_chain/reasoning/fix_steps)
+│   │   ├── perplexica_client.py # A2 — search + result cache 6h + cooldown 60s
+│   │   ├── llm.py               # unified LLM gateway (Ollama native + OpenAI-compatible)
+│   │   ├── ollama.py            # Ollama native client (ใช้ผ่าน gateway)
 │   │   ├── aiops_ml.py          # optional ML service client (graceful degrade)
+│   │   ├── log_ml_client.py     # Isolation Forest service client (:3050)
 │   │   ├── baseline_store.py    # SQLite persistence (window stats, baseline)
+│   │   ├── result_store.py      # SQLite ผลวิเคราะห์ (max 500, auto-pruned)
 │   │   └── predictor.py         # trend analysis + POS fingerprint matching
 │   │
 │   ├── knowledge/
@@ -284,22 +291,28 @@ POST /ingest
          │
          ▼
     analyze() router
-      1. filter_entries()        → กรอง severity + cap 500
-      2. group_by_host()         → dict[host → entries[]]
-      3. [concurrent per host]   → asyncio.gather()
+      1. filter_entries()        → กรอง severity + cap 500 (เก็บยอด pre-filter ต่อ host ไว้เป็นตัวหาร health)
+      2. group_by_host()         → dict[host → entries[]] (+ metric_analyzer.group_by_host สำหรับ metrics)
+      3. รันเป็น phase (ทุก host ต่อ phase):
          │
          ▼
-    _analyze_host() per host
-      ├─ compute_host_health_score()   → 0–100
-      ├─ compute_top_errors()          → top 5 error messages
+    Phase 1  A1 (parallel)
+      ├─ compute_host_health_score()   → 0–100 (ตัวหาร = pre-filter total; cap: warn -35, error -70, anomaly -30)
+      ├─ compute_top_errors()          → top 5 error msgs (ไม่มี error → fallback เป็น warn msgs)
+      ├─ metric_analyzer.evaluate_host() → metric threshold anomalies (มี unit-mismatch guard)
       ├─ extract_signals_from_messages() → 7 signal types
+      ├─ log-ml Isolation Forest score → anomaly + ปรับ health
       ├─ save_window_stat()            → บันทึก SQLite
-      ├─ Ollama generate()             → Explanation (AI)
       ├─ analyze_trend()               → TrendInfo (slope, anomaly types)
       └─ generate_prediction()         → PredictionInfo (risk, fingerprint, ETA)
+    Phase 2  A3 MiroFish (parallel)    → 5 frames + per-frame LLM insight
+    Phase 3  AA rule pass (parallel, no LLM) → rule chain + top_frame (ใช้สร้าง A2 query)
+    Phase 4  A2 Perplexica (sequential) → web research (cache 6h, cooldown 60s; ข้ามถ้าไม่มีหลักฐานให้ค้น)
+    Phase 5  AA LLM judge (parallel)   → เห็น top errors + insights + ค่า metric + rule chain + ผล A2
+                                        → root_cause_chain + confidence + fix_steps + reasoning
          │
          ▼
-    AnalyzeResponse (JSON)
+    AnalyzeResponse (JSON) — summary เป็น plain text บรรทัดเดียว (คั่น " | ", ล้าง markdown)
 ```
 
 ---
@@ -487,14 +500,15 @@ python -m pytest tests/test_log_processor.py -v
 python -m pytest tests/ --cov=app --cov-report=term-missing
 ```
 
-**Test coverage ปัจจุบัน:** 53 tests
+**Test coverage ปัจจุบัน:** 56 tests
 
 | File | Tests |
 |------|-------|
-| test_log_processor.py | 25 |
-| test_godeyes_adapter.py | 17 |
-| test_ollama.py | 7 |
-| test_request_validation.py | 4 |
+| test_godeyes_adapter.py | 30 |
+| test_log_processor.py | 15 |
+| test_request_validation.py | 6 |
+| test_ollama.py | 4 |
+| test_analyze_phase1.py | 1 |
 
 > **สำคัญ:** เมื่อเพิ่ม feature ใหม่ใน `pos.py` หรือ `predictor.py` ให้เพิ่ม test ใน `tests/` ด้วยเสมอ
 
