@@ -9,10 +9,12 @@ from fastapi.responses import JSONResponse, Response
 
 from app.config import config
 from app.routers import analyze, health, ingest
-from app.routers import config_router, results_router
-from app.services import perplexica_client
+from app.routers import config_router, results_router, topology
+from app.services import perplexica_client, research_worker
 from app.services.baseline_store import init_db
+from app.services.knowledge_store import enqueue_all_tenants, init_knowledge_table
 from app.services.result_store import init_result_table
+from app.services.topology_store import init_topology_tables
 
 
 def _setup_logging() -> None:
@@ -25,6 +27,9 @@ async def lifespan(app: FastAPI):
     _setup_logging()
     init_db()
     init_result_table()
+    init_topology_tables()
+    init_knowledge_table()
+    enqueue_all_tenants()
     logging.getLogger(__name__).info(
         "log-analyzer starting — llm=%s/%s model=%s aiops_ml=%s enabled=%s",
         config.llm.provider,
@@ -37,7 +42,10 @@ async def lifespan(app: FastAPI):
     # embedding cold-start. Non-blocking: readiness/health come up immediately.
     if config.perplexica.enabled:
         asyncio.create_task(perplexica_client.warm_up())
+    # Phase 2: background research queue — เก็บ known issues ต่อ (software, version)
+    worker_task = asyncio.create_task(research_worker.run_forever())
     yield
+    worker_task.cancel()
 
 
 app = FastAPI(title="log-analyzer", version="1.0.0", lifespan=lifespan)
@@ -65,6 +73,9 @@ app.include_router(analyze.router)
 app.include_router(ingest.router)
 app.include_router(config_router.router)
 app.include_router(results_router.router)
+app.include_router(topology.router)
+# frontend proxy ส่งเฉพาะ /api/* — mount ซ้ำใต้ /api ให้หน้า Settings ใช้
+app.include_router(topology.router, prefix="/api")
 
 
 @app.get("/metrics", include_in_schema=False)
