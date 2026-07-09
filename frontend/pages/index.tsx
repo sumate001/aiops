@@ -10,7 +10,10 @@ type AnomalyScore  = { metric: string; score: number; severity: string; current_
 type MiroFishFrame = { frame: string; lens: string; relevance: number; signal_hits: number; top_keywords: string[]; insight?: string };
 type Synthesis     = { root_cause_chain: string[]; confidence: number; fix_steps: string[]; method: string; top_frame?: string };
 type HostAnalysis  = { host: string; entry_count: number; error_count: number; warn_count: number; health_score: number; status: string; anomalies: AnomalyScore[]; mirofish: MiroFishFrame[]; synthesis?: Synthesis; enrichment?: { query: string; answer: string } };
-type FullResult    = { tenant_id: string; analyzed_at: string; health_score: number; status: string; hosts: HostAnalysis[]; sources: { ollama_used: boolean; ollama_model: string } };
+type PropagationIncident = { node_id: string; label?: string; start_health: number; end_health: number; warn_at_minute?: number; crit_at_minute?: number; caused_by: string[]; trigger?: string };
+type PropagationForecast = { engine: string; horizon_minutes: number; seeded: Record<string, number>; incidents: PropagationIncident[] };
+type FullResult    = { tenant_id: string; analyzed_at: string; health_score: number; status: string; hosts: HostAnalysis[]; sources: { ollama_used: boolean; ollama_model: string }; propagation_forecast?: PropagationForecast | null };
+type KnowledgeQueue = { queue: Record<string, number> };
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 const healthColor = (s: number) => s >= 80 ? "text-green-400" : s >= 50 ? "text-yellow-400" : "text-red-400";
@@ -63,15 +66,18 @@ export default function Dashboard() {
   const [pipeStatus, setPipeStatus] = useState<StatusData | null>(null);
   const [results,    setResults]    = useState<ResultRow[]>([]);
   const [latest,     setLatest]     = useState<FullResult | null>(null);
+  const [knowledge,  setKnowledge]  = useState<KnowledgeQueue | null>(null);
   const [hostIdx,    setHostIdx]    = useState(0);
   const [loading,    setLoading]    = useState(true);
 
   const fetchAll = async () => {
-    const [s, r] = await Promise.all([
+    const [s, r, k] = await Promise.all([
       fetch("/api/status", { cache: "no-store" }).then((x) => x.json()).catch(() => null),
       fetch("/api/results?limit=10", { cache: "no-store" }).then((x) => x.json()).catch(() => ({ results: [] })),
+      fetch("/api/knowledge", { cache: "no-store" }).then((x) => x.json()).catch(() => null),
     ]);
     setPipeStatus(s);
+    setKnowledge(k);
     const rows: ResultRow[] = r.results || [];
     setResults(rows);
 
@@ -222,6 +228,9 @@ export default function Dashboard() {
           {/* A3 MiroFish */}
           <AgentBox label="A3 MiroFish" desc="5-Frame Analysis" statusKey="A3_mirofish" borderColor="border-amber-800" agents={pipeStatus?.agents}>
             <p className="text-[10px] text-gray-600 uppercase mb-2">Output — frames (relevance)</p>
+            {host?.mirofish && host.mirofish.length > 0 && !host.mirofish.some((f) => f.insight) && (
+              <p className="text-[9px] text-gray-600 mb-1.5">scoring-only mode (expert LLM off)</p>
+            )}
             {host?.mirofish && host.mirofish.length > 0 ? (
               <div className="space-y-1.5">
                 {host.mirofish.map((f) => (
@@ -293,6 +302,83 @@ export default function Dashboard() {
             </div>
           </div>
         </AgentBox>
+
+        {/* fan-in arrow */}
+        <div className="flex justify-center my-2 text-gray-700 text-sm">↓</div>
+
+        {/* Topology Propagation Forecast */}
+        <div className="bg-gray-900 border border-rose-800 rounded-xl overflow-hidden mb-4">
+          <div className="flex items-center gap-2 px-4 py-2.5 bg-gray-950/40 border-b border-gray-800">
+            <span className={`w-2 h-2 rounded-full shrink-0 ${
+              latest?.propagation_forecast ? "bg-green-500" : "bg-gray-600"}`} />
+            <span className="text-xs font-bold text-white">Topology Propagation</span>
+            <span className="text-[10px] text-gray-500">deterministic graph engine — ทำนายการลามข้าม host</span>
+            {latest?.propagation_forecast && (
+              <span className="ml-auto text-[10px] text-gray-500">
+                seeds: {Object.keys(latest.propagation_forecast.seeded).length} ·
+                horizon {latest.propagation_forecast.horizon_minutes}m
+              </span>
+            )}
+          </div>
+          <div className="p-4">
+            {!latest?.propagation_forecast ? (
+              <NoData msg="ไม่มี forecast ในรอบล่าสุด — host ไม่ match topology หรือยังไม่ upload topology (Settings)" />
+            ) : latest.propagation_forecast.incidents.length === 0 ? (
+              <p className="text-xs text-green-400/80">✓ ไม่มี downstream impact ที่คาดการณ์</p>
+            ) : (
+              <div className="space-y-1.5">
+                {latest.propagation_forecast.incidents.slice(0, 6).map((inc) => (
+                  <div key={inc.node_id} className="flex items-center gap-3 bg-gray-800 rounded px-3 py-1.5">
+                    <span className="text-xs text-white font-medium min-w-[140px] truncate">
+                      {inc.label ?? inc.node_id}
+                      {inc.trigger === "trend" && <span className="ml-1 text-[9px] text-purple-300">◆ forecast</span>}
+                    </span>
+                    <span className={`text-[11px] font-bold font-mono ${inc.crit_at_minute != null ? "text-red-400" : "text-yellow-400"}`}>
+                      {inc.crit_at_minute != null ? `crit ~${inc.crit_at_minute}m` : `warn ~${inc.warn_at_minute}m`}
+                    </span>
+                    <span className="text-[10px] text-gray-500 font-mono flex-1 truncate">
+                      {inc.caused_by.join(" → ")}
+                    </span>
+                  </div>
+                ))}
+                {latest.propagation_forecast.incidents.length > 6 && (
+                  <p className="text-[10px] text-gray-600">
+                    +{latest.propagation_forecast.incidents.length - 6} more — ดูทั้งหมดในหน้า Pipeline
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Version Knowledge queue */}
+        <div className="bg-gray-900 border border-teal-900 rounded-xl overflow-hidden mb-4">
+          <div className="flex items-center gap-2 px-4 py-2.5 bg-gray-950/40 border-b border-gray-800">
+            <span className={`w-2 h-2 rounded-full shrink-0 ${
+              knowledge?.queue && (knowledge.queue.ok ?? 0) > 0 ? "bg-green-500" :
+              knowledge?.queue ? "bg-yellow-500" : "bg-gray-600"}`} />
+            <span className="text-xs font-bold text-white">Version Knowledge</span>
+            <span className="text-[10px] text-gray-500">background research ต่อ (software, version) — ป้อน judge</span>
+          </div>
+          <div className="p-4 flex gap-3 flex-wrap">
+            {!knowledge?.queue ? (
+              <NoData msg="ยังไม่มีคิว — upload topology ก่อน" />
+            ) : (
+              <>
+                {[
+                  { key: "ok", label: "researched", color: "text-green-400" },
+                  { key: "pending", label: "pending", color: "text-yellow-400" },
+                  { key: "failed", label: "failed", color: "text-red-400" },
+                ].map(({ key, label, color }) => (
+                  <div key={key} className="bg-gray-800 rounded-lg px-4 py-2 text-center min-w-[90px]">
+                    <p className={`text-xl font-bold font-mono ${color}`}>{knowledge.queue[key] ?? 0}</p>
+                    <p className="text-[10px] text-gray-500">{label}</p>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        </div>
 
         {/* integrations footer */}
         {pipeStatus?.integrations && (

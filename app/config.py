@@ -58,6 +58,9 @@ class StageLLMConfig(BaseModel):
     global `LLMConfig` defaults; when True it uses its own provider/model/key."""
 
     override: bool = False
+    # ปิด LLM enrichment เฉพาะ stage นี้ (ตอนนี้ mirofish ใช้ตัวเดียว —
+    # deterministic scoring ยังทำงานปกติ) ส่วน override/provider คุมว่าใช้โมเดลไหน
+    enabled: bool = True
     provider: str = "ollama"
     base_url: str = "http://localhost:11434"
     model: str = "gemma4:e4b"

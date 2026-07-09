@@ -270,6 +270,8 @@ export default function Settings() {
           </p>
         </Section>
 
+        <TopologySection />
+
         {cfg && (
           <Section title="aiops-ml (read-only)">
             <div className="text-xs text-gray-400 space-y-1">
@@ -294,6 +296,123 @@ export default function Settings() {
         </button>
       </div>
     </div>
+  );
+}
+
+// ── Topology upload (Phase 1) ──────────────────────────────────────────────
+type TopologyStatus = {
+  topology_version: string | null;
+  updated_at: string;
+  nodes: unknown[];
+  edges: unknown[];
+};
+
+function TopologySection() {
+  const [tenantId, setTenantId] = useState("internal");
+  const [status, setStatus] = useState<TopologyStatus | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const loadStatus = (tenant: string) => {
+    fetch(`/api/topology?tenant_id=${encodeURIComponent(tenant)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setStatus(d))
+      .catch(() => setStatus(null));
+  };
+
+  useEffect(() => {
+    loadStatus(tenantId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const onFile = async (file: File) => {
+    setFileName(file.name);
+    setMsg(null);
+    setUploading(true);
+    try {
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(await file.text());
+      } catch {
+        throw new Error("File is not valid JSON");
+      }
+      const isGodeye = payload.network_topology || payload.service_dependency;
+      if (!isGodeye && !Array.isArray(payload.nodes)) {
+        throw new Error(
+          'JSON must contain "nodes" array, or GodEye "network_topology"/"service_dependency"'
+        );
+      }
+      if (!payload.tenant_id) payload.tenant_id = tenantId;
+
+      const r = await fetch("/api/topology", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        throw new Error(typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail ?? d));
+      }
+      const warn =
+        d.edges_referencing_unknown_nodes > 0
+          ? ` (warning: ${d.edges_referencing_unknown_nodes} edges reference nodes not in this upload)`
+          : "";
+      setMsg({
+        ok: true,
+        text: `Uploaded: ${d.nodes} nodes, ${d.edges} edges [${(d.layers ?? []).join(", ") || "no edges"}]${warn}`,
+      });
+      loadStatus(String(payload.tenant_id));
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    }
+    setUploading(false);
+  };
+
+  return (
+    <Section title="Topology (network + service) — v2">
+      <p className="text-xs text-gray-500 -mt-1">
+        Upload a topology snapshot JSON from GodEye: {"{ nodes: [...], edges: [...] }"}.
+        Network and service layers can be uploaded as separate files — edges are replaced per layer, nodes are merged.
+      </p>
+      <Field label="Tenant ID" value={tenantId} onChange={(v) => setTenantId(v)} onBlur={(v) => loadStatus(v)} />
+      <div>
+        <label className="block text-xs text-gray-400 mb-1">Topology file (.json)</label>
+        <label className="flex items-center gap-3 cursor-pointer bg-gray-800 border border-dashed border-gray-600 hover:border-blue-500 rounded-lg px-4 py-3 transition-colors">
+          <span className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium px-3 py-1.5 rounded-md">
+            {uploading ? "Uploading…" : "Browse file"}
+          </span>
+          <span className="text-xs text-gray-400 truncate">{fileName ?? "No file selected"}</span>
+          <input
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            disabled={uploading}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onFile(f);
+              e.target.value = ""; // allow re-selecting the same file
+            }}
+          />
+        </label>
+      </div>
+      {msg && (
+        <div className={`rounded-lg px-3 py-2 text-xs ${msg.ok ? "bg-green-900 text-green-300" : "bg-red-900 text-red-300"}`}>
+          {msg.text}
+        </div>
+      )}
+      <div className="text-xs text-gray-400">
+        {status ? (
+          <>
+            Current: {status.nodes.length} nodes · {status.edges.length} edges
+            {status.topology_version ? <> · version {status.topology_version}</> : null}
+            {" · updated "}{new Date(status.updated_at).toLocaleString()}
+          </>
+        ) : (
+          <>No topology stored for this tenant yet.</>
+        )}
+      </div>
+    </Section>
   );
 }
 

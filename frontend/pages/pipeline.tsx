@@ -33,11 +33,21 @@ type HostAnalysis = {
   mirofish: MiroFishFrame[]; synthesis?: Synthesis;
   trend?: Trend; prediction?: Prediction; enrichment?: Enrichment;
 };
+type PropagationIncident = {
+  node_id: string; label?: string; start_health: number; end_health: number;
+  warn_at_minute?: number; crit_at_minute?: number; caused_by: string[];
+  trigger?: string;
+};
+type PropagationForecast = {
+  engine: string; horizon_minutes: number;
+  seeded: Record<string, number>; incidents: PropagationIncident[];
+};
 type Result = {
   tenant_id: string; analyzed_at: string; health_score: number; status: string;
   window: { from: string; to: string };
   hosts: HostAnalysis[];
   sources: { ollama_used: boolean; ollama_model: string; aiops_ml_used: boolean };
+  propagation_forecast?: PropagationForecast | null;
 };
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -341,6 +351,11 @@ export default function Pipeline() {
                   <Chip label="rule_hits[]" type="in" />
                   <Chip label="anomaly_score" type="in" />
                 </div>
+                {host.mirofish.length > 0 && !host.mirofish.some((f) => f.insight) && (
+                  <p className="text-[10px] text-gray-500 mb-2">
+                    ℹ expert LLM calls ปิดอยู่ (llm.mirofish.enabled=false) — ใช้ deterministic frame scoring อย่างเดียว
+                  </p>
+                )}
                 {host.mirofish.length === 0 ? (
                   <p className="text-xs text-gray-600">No MiroFish frames</p>
                 ) : (
@@ -520,6 +535,88 @@ export default function Pipeline() {
                     )}
                   </div>
                 </div>
+              </Section>
+
+              {/* ── Topology Propagation (Phase 3) ───────────────────────── */}
+              <div className="flex gap-1 items-center text-gray-700 pl-4"><span>↓</span></div>
+              <Section title="Topology Propagation Forecast — deterministic graph engine" color="border-rose-800">
+                <div className="flex gap-3 mb-3 flex-wrap">
+                  <Chip label="health_score ทุก host (seed)" type="in" />
+                  <Chip label="health trend slope (window history)" type="in" />
+                  <Chip label="dependency graph (POST /topology)" type="in" />
+                  <Chip label="propagation_forecast + judge evidence" type="out" />
+                </div>
+                <p className="text-[10px] text-gray-500 mb-3">
+                  พยากรณ์แบบ deterministic: seed ที่ trend ดิ่งจะถูกทำนายว่าจะ critical เมื่อไหร่ (ป้าย
+                  <span className="text-purple-300"> forecast</span>) แล้วลามตาม dependency graph ต่อ
+                </p>
+                {!result.propagation_forecast ? (
+                  <p className="text-xs text-gray-600 bg-gray-800 rounded-lg p-3">
+                    ไม่มี forecast — host ในรอบนี้ไม่ match topology node เลย
+                    (ดู docs/logsim-topology-alignment.md) หรือยังไม่ได้ upload topology
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex gap-2 flex-wrap items-center">
+                      <span className="text-[10px] text-gray-600 uppercase">Seeds (จากผลวิเคราะห์จริง):</span>
+                      {Object.entries(result.propagation_forecast.seeded).map(([n, h]) => (
+                        <span key={n} className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
+                          h < 50 ? "border-red-800 bg-red-950/40 text-red-300" :
+                          h < 70 ? "border-yellow-800 bg-yellow-950/40 text-yellow-300" :
+                          "border-green-800 bg-green-950/40 text-green-300"}`}>
+                          {n}={h}
+                        </span>
+                      ))}
+                      <span className="text-[10px] text-gray-600 ml-auto">
+                        horizon {result.propagation_forecast.horizon_minutes} min · {result.propagation_forecast.engine}
+                      </span>
+                    </div>
+                    {result.propagation_forecast.incidents.length === 0 ? (
+                      <p className="text-xs text-green-400/70 bg-gray-800 rounded-lg p-3">
+                        ✓ ไม่มี downstream impact — ปัญหาไม่ลามใน {result.propagation_forecast.horizon_minutes} นาที
+                      </p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="text-[10px] text-gray-600 uppercase text-left">
+                              <th className="py-1 pr-3">Node</th>
+                              <th className="py-1 pr-3">Warn</th>
+                              <th className="py-1 pr-3">Critical</th>
+                              <th className="py-1 pr-3">Health</th>
+                              <th className="py-1">Cause chain</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {result.propagation_forecast.incidents.map((inc) => (
+                              <tr key={inc.node_id} className="border-t border-gray-800">
+                                <td className="py-1.5 pr-3">
+                                  <span className="text-white font-medium">{inc.label ?? inc.node_id}</span>
+                                  <span className="text-gray-600 font-mono ml-1.5 text-[10px]">{inc.node_id}</span>
+                                  {inc.trigger === "trend" && (
+                                    <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded bg-purple-950/60 text-purple-300 border border-purple-800">forecast</span>
+                                  )}
+                                </td>
+                                <td className="py-1.5 pr-3 text-yellow-400 font-mono">
+                                  {inc.warn_at_minute != null ? `~${inc.warn_at_minute}m` : "—"}
+                                </td>
+                                <td className="py-1.5 pr-3 text-red-400 font-mono">
+                                  {inc.crit_at_minute != null ? `~${inc.crit_at_minute}m` : "—"}
+                                </td>
+                                <td className="py-1.5 pr-3 font-mono text-gray-400">
+                                  {inc.start_health}→{inc.end_health}
+                                </td>
+                                <td className="py-1.5 text-gray-500 font-mono text-[10px]">
+                                  {inc.caused_by.join(" → ")}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
               </Section>
 
             </div>
