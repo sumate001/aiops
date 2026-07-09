@@ -187,6 +187,8 @@ def _build_judge_prompt(
     prediction: dict | None = None,
     perplexica_answer: str | None = None,
     top_errors: list[dict] | None = None,
+    propagation_lines: list[str] | None = None,
+    knowledge_lines: list[str] | None = None,
 ) -> str:
     relevant_frames = [f for f in mirofish_frames if f["relevance"] > 0]
     frame_lines = []
@@ -212,6 +214,14 @@ def _build_judge_prompt(
     anomaly_block = "\n".join(anomaly_lines)
     rule_chain_block = "\n".join(f"  - {c}" for c in rule_result.root_cause_chain)
     research_block = f"  {perplexica_answer}" if perplexica_answer else "  (no web research)"
+    propagation_block = (
+        "\n".join(f"  - {l}" for l in propagation_lines)
+        if propagation_lines else "  (no topology forecast)"
+    )
+    knowledge_block = (
+        "\n".join(f"  - {l}" for l in knowledge_lines)
+        if knowledge_lines else "  (no version knowledge yet)"
+    )
 
     predictor_block = "  (no prediction)"
     if prediction:
@@ -250,6 +260,14 @@ Rule-based chain (baseline):
 
 Web research (A2 Perplexica — external context on this failure pattern):
 {research_block}
+
+Topology propagation forecast (deterministic simulation on the real
+dependency graph — which downstream services this host's condition will
+degrade, and when):
+{propagation_block}
+
+Known issues for this host's software/OS versions (from accumulated research):
+{knowledge_block}
 
 Reply ONLY with a JSON object, no markdown fences:
 {{
@@ -298,6 +316,8 @@ async def synthesize(
     prediction: dict | None = None,
     perplexica_answer: str | None = None,
     top_errors: list[dict] | None = None,
+    propagation_lines: list[str] | None = None,
+    knowledge_lines: list[str] | None = None,
     ollama_generate=None,
     model: str = "",
     base_url: str = "",
@@ -317,6 +337,8 @@ async def synthesize(
         host, health_score, anomalies, mirofish_frames, rule_result, trend, prediction,
         perplexica_answer=perplexica_answer,
         top_errors=top_errors,
+        propagation_lines=propagation_lines,
+        knowledge_lines=knowledge_lines,
     )
     try:
         raw = await ollama_generate(

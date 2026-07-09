@@ -16,6 +16,8 @@ from app.models.response import (
     MiroFishFrame,
     PerplexicaEnrichment,
     PerplexicaSource,
+    PropagationForecast,
+    PropagationIncident,
     Sources,
     Synthesis,
     TopError,
@@ -28,6 +30,9 @@ from app.services import synthesizer
 from app.services import perplexica_client
 from app.services import metrics
 from app.services import metric_analyzer
+from app.services import knowledge_store
+from app.services import propagation
+from app.services import topology_store
 from app.services.result_store import save_result
 from app.services.aiops_ml import KNOWN_PROFILES
 from app.knowledge.pos import extract_signals_from_messages
@@ -90,6 +95,10 @@ class _HostState:
     # trend/prediction
     trend: str = "stable"
     prediction: dict | None = None
+
+    # Phase 3 topology outputs (หลักฐานเพิ่มให้ judge)
+    propagation_lines: list[str] = field(default_factory=list)
+    knowledge_lines: list[str] = field(default_factory=list)
 
 
 # ── Phase 1: A1 — Rule-based scoring + IF (no LLM, run all hosts in parallel) ──
@@ -215,7 +224,7 @@ async def _phase2_a3(st: _HostState) -> None:
         health_score=st.health_score,
         signal_counts=st.sig,
         top_error_msgs=st.top_error_msgs,
-        use_llm=config.llm.enabled,
+        use_llm=config.llm.enabled and config.llm.mirofish.enabled,
         ollama_generate=partial(llm_client.generate, provider=mf.provider, api_key=mf.api_key),
         model=mf.model,
         base_url=mf.base_url,
@@ -238,6 +247,98 @@ async def _phase3_aa_rule(st: _HostState) -> None:
         prediction=st.prediction.model_dump() if st.prediction else None,
     )
     logger.info("AA rule done — host=%s top_frame=%s", st.hostname, st.rule_result.top_frame)
+
+
+def _health_slope_per_min(hostname: str) -> float:
+    """slope ของ health_score (แต้ม/นาที) จาก recent windows — ติดลบ = เสื่อมลง
+    ใช้ recency-weighted least squares ตัวเดียวกับ predictor เพื่อความสอดคล้อง"""
+    from app.services.baseline_store import get_recent_windows
+    from app.services.predictor import _ts, _weighted_slope
+    windows = get_recent_windows(hostname, limit=15)
+    if len(windows) < 3:
+        return 0.0
+    windows = sorted(windows, key=lambda w: w["window_from"])
+    t0 = _ts(windows[0]["window_from"])
+    xs = [(_ts(w["window_from"]) - t0) / 60.0 for w in windows]  # นาที
+    ys = [w["health_score"] for w in windows]
+    return _weighted_slope(xs, ys)
+
+
+# ── Phase 3.5: Topology propagation (deterministic, instant) ──────────────
+def _run_propagation(tenant_id: str, states: list["_HostState"]) -> PropagationForecast | None:
+    """simulate การลามบน dependency graph จาก health จริงของรอบนี้
+    แล้วแนบผลเป็นหลักฐานให้ judge (phase 5) + forecast ใน response
+    ไม่มี topology หรือไม่มี host match → ข้ามเงียบๆ (degrade gracefully)"""
+    try:
+        hmap = topology_store.host_map(tenant_id)
+        if not hmap and tenant_id != "internal":
+            # deployment เดี่ยว: topology มัก upload ใต้ tenant default
+            tenant_id = "internal"
+            hmap = topology_store.host_map(tenant_id)
+        if not hmap:
+            return None
+        seeds: dict[str, float] = {}
+        node_by_host: dict[str, str] = {}
+        for st in states:
+            node_id = hmap.get(st.hostname)
+            if node_id:
+                # host หลายตัวอาจ map ลง node เดียว — ใช้ค่าแย่สุด
+                seeds[node_id] = min(seeds.get(node_id, 100.0), st.health_score)
+                node_by_host[st.hostname] = node_id
+        if not seeds:
+            return None
+
+        # health-slope ต่อ seed (แต้ม/นาที, ติดลบ = กำลังเสื่อม) จากประวัติ window จริง
+        # → seed ที่ "ยังไม่ critical แต่กำลังดิ่ง" จะถูกพยากรณ์ล่วงหน้า
+        trends: dict[str, float] = {}
+        for st in states:
+            node_id = node_by_host.get(st.hostname)
+            if not node_id:
+                continue
+            slope = _health_slope_per_min(st.hostname)
+            if slope < 0:
+                # หลาย host → node เดียว: ใช้ slope ที่ดิ่งแรงสุด
+                trends[node_id] = min(trends.get(node_id, 0.0), slope)
+
+        topo = topology_store.get_topology(tenant_id)
+        forecast = propagation.simulate(seeds, topo["edges"], trends=trends)
+        labels = topology_store.node_labels(tenant_id)
+        lines = propagation.describe(forecast, labels)
+
+        # แจกหลักฐานให้ host ที่อยู่ใน chain ของ incident นั้นๆ
+        for st in states:
+            node_id = node_by_host.get(st.hostname)
+            if not node_id:
+                continue
+            st.propagation_lines = [
+                line for inc, line in zip(forecast["incidents"], lines)
+                if node_id in inc["caused_by"]
+            ]
+            # ความรู้ประจำ version ของ node นี้ (Phase 2) — เท่าที่สะสมได้
+            profile = topology_store.get_node(tenant_id, node_id)
+            if profile:
+                for k in knowledge_store.get_for_node(profile):
+                    st.knowledge_lines.append(f"[{k['key']}] {k['answer'][:400]}")
+                # host กำลังมีปัญหา → ดัน research profile ขึ้นหัวคิว
+                if st.health_score < 70:
+                    for sw in profile.get("software") or []:
+                        knowledge_store.bump_priority(sw["name"], sw.get("version"))
+
+        if forecast["incidents"]:
+            logger.info("Propagation: %d downstream incidents predicted (seeds=%d)",
+                        len(forecast["incidents"]), len(seeds))
+        return PropagationForecast(
+            engine=forecast["engine"],
+            horizon_minutes=forecast["horizon_minutes"],
+            seeded=forecast["seeded"],
+            incidents=[
+                PropagationIncident(**inc, label=labels.get(inc["node_id"]))
+                for inc in forecast["incidents"]
+            ],
+        )
+    except Exception:
+        logger.exception("Propagation step failed — continuing without forecast")
+        return None
 
 
 # ── Phase 4: A2 — Perplexica (slow LLM, run one host at a time) ──
@@ -300,6 +401,8 @@ async def _phase5_aa_llm(st: _HostState) -> None:
         prediction=st.prediction.model_dump() if st.prediction else None,
         perplexica_answer=st.enrichment.answer if st.enrichment else None,
         top_errors=[e.model_dump() for e in st.top_errors],
+        propagation_lines=st.propagation_lines,
+        knowledge_lines=st.knowledge_lines,
         use_llm=config.llm.enabled,
         ollama_generate=partial(llm_client.generate, provider=sy.provider, api_key=sy.api_key),
         model=sy.model,
@@ -421,6 +524,9 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     logger.info("=== Phase 3: AA rule pass — %d hosts ===", len(states))
     await asyncio.gather(*[_phase3_aa_rule(st) for st in states])
 
+    # ── Phase 3.5: Topology propagation — deterministic, instant ──
+    prop_forecast = _run_propagation(req.tenant_id, states)
+
     # ── Phase 4: A2 Perplexica — one host at a time (slow LLM) ──
     logger.info("=== Phase 4: A2 Perplexica — sequential ===")
     for st in states:
@@ -463,6 +569,7 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             ollama_used=any_ollama_used,
             ollama_model=config.llm.model if config.llm.enabled else config.ollama.model,
         ),
+        propagation_forecast=prop_forecast,
     )
 
     save_result(response.model_dump(mode="json"))

@@ -96,6 +96,26 @@ class HostAnalysis(BaseModel):
     enrichment: PerplexicaEnrichment | None = None
 
 
+class PropagationIncident(BaseModel):
+    node_id: str
+    label: str | None = None
+    start_health: float
+    end_health: float
+    warn_at_minute: int | None = None
+    crit_at_minute: int | None = None
+    caused_by: list[str] = []              # chain ต้นตอ → node นี้
+    trigger: str = "propagation"           # "trend" = พยากรณ์จากแนวโน้มตัวเอง
+
+
+class PropagationForecast(BaseModel):
+    """Phase 3 — ผลจาก graph propagation engine (deterministic)
+    field ใหม่แยกจาก prediction เดิม เพื่อไม่กระทบ GodEye UI"""
+    engine: str
+    horizon_minutes: int
+    seeded: dict[str, float] = {}          # node_id → health เริ่มต้นจากผลวิเคราะห์จริง
+    incidents: list[PropagationIncident] = []
+
+
 class Sources(BaseModel):
     aiops_ml_used: bool
     ollama_used: bool
@@ -112,3 +132,4 @@ class AnalyzeResponse(BaseModel):
     hosts: list[HostAnalysis]
     summary: str
     sources: Sources
+    propagation_forecast: PropagationForecast | None = None
