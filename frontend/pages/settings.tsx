@@ -3,7 +3,7 @@ import Link from "next/link";
 
 type StageCfg = {
   override?: boolean;
-  enabled?: boolean;
+  enabled?: boolean;   // false ⇒ ข้าม LLM enrichment ของ stage นี้ (A3)
   provider: string;
   base_url: string;
   model: string;
@@ -52,6 +52,7 @@ type LlmForm = {
 };
 type StageForm = {
   override: boolean;
+  enabled: boolean;
   provider: string;
   base_url: string;
   model: string;
@@ -61,6 +62,7 @@ type StageForm = {
 
 const emptyStage = (): StageForm => ({
   override: false,
+  enabled: true,
   provider: "ollama",
   base_url: "http://localhost:11434",
   model: "gemma4:e4b",
@@ -113,6 +115,7 @@ export default function Settings() {
         const l = data.llm;
         const stage = (s: StageCfg): StageForm => ({
           override: !!s.override,
+          enabled: s.enabled !== false,
           provider: s.provider,
           base_url: s.base_url,
           model: s.model,
@@ -145,6 +148,7 @@ export default function Settings() {
     try {
       const stageOut = (s: StageForm) => ({
         override: s.override,
+        enabled: s.enabled,
         provider: s.provider,
         base_url: s.base_url,
         model: s.model,
@@ -237,6 +241,8 @@ export default function Settings() {
             stage={llm.mirofish}
             fallback={llm}
             onChange={(s) => setLlm({ ...llm, mirofish: s })}
+            showEnabled
+            enabledNote="เปิด = ให้ 5 expert frames เรียก LLM แล้วเอาความเห็นไปรวมวิเคราะห์ (root cause). ปิด = ใช้ deterministic frame scoring อย่างเดียว (เร็วกว่า, ประหยัด LLM calls)."
           />
           <StageOverride
             title="Synthesizer (AA)"
@@ -525,6 +531,8 @@ function StageOverride({
   fallback,
   onChange,
   note,
+  showEnabled,
+  enabledNote,
 }: {
   title: string;
   providers: LlmProvider[];
@@ -532,9 +540,21 @@ function StageOverride({
   fallback: { provider: string; model: string };
   onChange: (s: StageForm) => void;
   note?: string;
+  showEnabled?: boolean;
+  enabledNote?: string;
 }) {
   return (
     <div className="mt-2 border-t border-gray-700 pt-4">
+      {showEnabled && (
+        <div className="mb-3">
+          <Toggle
+            label={`${title} — enabled`}
+            checked={stage.enabled}
+            onChange={(v) => onChange({ ...stage, enabled: v })}
+          />
+          {enabledNote && <p className="text-xs text-gray-500 mt-1">{enabledNote}</p>}
+        </div>
+      )}
       <Toggle label={`${title} — override`} checked={stage.override} onChange={(v) => onChange({ ...stage, override: v })} />
       {note && <p className="text-xs text-gray-500 mt-1">{note}</p>}
       {!stage.override ? (

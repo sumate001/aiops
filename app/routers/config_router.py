@@ -17,6 +17,7 @@ router = APIRouter(prefix="/api")
 
 class StageUpdate(BaseModel):
     override: bool = False
+    enabled: bool = True        # false ⇒ ข้าม LLM enrichment ของ stage นี้ (A3)
     provider: str = "ollama"
     base_url: str = "http://localhost:11434"
     model: str = "gemma4:e4b"
@@ -118,6 +119,7 @@ async def get_config() -> dict:
 def _stage_dict(s) -> dict:
     return {
         "override": s.override,
+        "enabled": s.enabled,
         "provider": s.provider,
         "base_url": s.base_url,
         "model": s.model,
@@ -205,6 +207,7 @@ async def update_config(body: ConfigUpdate) -> dict:
             su = getattr(body.llm, stage)
             block = llm.setdefault(stage, {})
             block["override"] = su.override
+            block["enabled"] = su.enabled
             block["provider"] = su.provider
             block["base_url"] = su.base_url
             block["model"] = su.model
