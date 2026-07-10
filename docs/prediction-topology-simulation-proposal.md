@@ -42,6 +42,27 @@
 - ข้อสังเกต: node role=external (VISA/ธนาคาร) โผล่ใน forecast ได้ —
   อาจกรองออกจากรายงานในอนาคต
 
+### 🔖 ต้องพิจารณาอีกครั้ง: เปลี่ยน A2 backend (2026-07-10)
+
+ปัจจุบัน A2 = **Perplexica (self-hosted)** — search + synthesize answer ในตัว
+ปัญหาที่เจอ: SearXNG engine บางตัวถูกบล็อค, timeout เป็นครั้งคราว (เคยทำ logsim
+รอ response ไม่ทัน). พิจารณาสลับไป **Perplexity API** ในอนาคต — สรุปทางเลือก:
+
+- **Sonar answer API**: จ่าย output token แพง ($8–15/1M) คุมยาก เพราะยิงต่อ host
+- **Search API (แนะนำถ้าจะเปลี่ยน)**: คืน **ผลค้นดิบ (snippets + URL)** จ่าย
+  **ต่อ request อย่างเดียว ~$0.005/req** ไม่มี token cost ไม่ต้องใช้ LLM ฝั่ง Perplexity
+  → เข้ากับสถาปัตยกรรมเรา (แยก search ออกจาก analysis เหมือน Phase 3/A3):
+  - **A2 real-time**: Search API → top 3-5 snippets → ยัดเข้า judge prompt ตรงๆ
+    (ตัด LLM call ของ A2 ทิ้ง เร็วขึ้น+ถูกลง; judge=groq llama-3.3-70b แรงพอย่อยเอง)
+  - **Research worker (Phase 2)**: Search API → snippets → local model สรุปครั้งเดียว
+    → เก็บ knowledge_store (background latency ไม่สำคัญ)
+  - ออกแบบให้สลับ provider ผ่านหน้า Settings เหมือน A3 (Perplexica เดิม / Perplexity Search ใหม่)
+- **ยังไม่ตัดสินใจ** — ต้องรู้ปริมาณ host/รอบ + ความถี่ ingest/วัน เพื่อคำนวณค่าใช้จ่าย/เดือนก่อน
+- ระวัง: คุณภาพเส้น research worker ขึ้นกับ local model ที่ย่อย snippet (ถ้า ollama เล็ก
+  ต้องเทียบคุณภาพก่อน)
+
+อ้างอิงราคา: https://docs.perplexity.ai/docs/getting-started/pricing
+
 ---
 
 ## 1. ไอเดียตั้งต้น (ตามที่เสนอ)
