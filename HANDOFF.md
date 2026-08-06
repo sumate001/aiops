@@ -1,6 +1,58 @@
-# HANDOFF — งานที่ค้าง (2026-06-24)
+# HANDOFF — งานที่ค้าง (2026-08-06)
 
 สรุปสถานะเพื่อไปทำต่อบนเครื่องอื่น
+
+---
+
+## 🆕 รอบ 2026-08-06 — A4 Memory + Feedback loop (branch `feat/a2-grounding-and-playbooks`)
+
+**branch นี้ยังไม่ merge เข้า main**
+
+ทำครบ Phase 1, 2, 2.11, 3 ของแผน godeyes — ระบบจำเคสที่เคยวิเคราะห์ได้ เอากลับมาใช้
+และให้คนยืนยัน/แก้ได้ · 216 tests ผ่าน · verify กับ Qdrant + `/analyze` จริงทุกขั้น
+
+### สิ่งที่เพิ่มเข้ามา
+
+| | |
+|---|---|
+| **A4 memory** | Qdrant 1.19 (`aiops-qdrant`, volume `aiops-qdrant-data`) · dense `multilingual-e5-small` + sparse BM25 fused ด้วย RRF · เข้า pipeline เป็น Phase 2.5 |
+| **Playbook** | 31 entries (mysql/postgresql/mongodb) แก้ปัญหา cold start · `scripts/seed_playbooks.py` (idempotent) |
+| **Feedback** | `POST /api/results/{id}/hosts/{host}/feedback` + `/api/memory/*` · UI มีปุ่มแยกตาม host |
+| **service_detector** | regex → mysql/postgresql/mongodb สำหรับ filter ของ A4 |
+| **normalize.py** | ยุบ log ให้เทียบกันได้ แต่กัน `ORA-01555` / `errno 111` / `HTTP 503` ไว้ |
+| **A2 fix (Phase 1)** | gate ไม่ให้คำตอบไร้แหล่งอ้างอิงเข้า judge + รื้อ `build_query` |
+
+### ค่าที่ "ไม่ตรงกับแผน" และเหตุผล — อย่าแก้กลับโดยไม่อ่านตรงนี้
+
+- **`min_score` 0.45 → 0.80** · e5 ไม่เคยให้คะแนนใกล้ศูนย์ วัดจริง: เหมือนกันเป๊ะ 0.96,
+  เรื่องเดียวกันคนละคำ 0.85, คนละเรื่องเลย 0.79, ภาษาไทยเรื่องอากาศ 0.72
+  ค่า 0.45 จะรับทุก point ในคอลเลกชันผ่านหมด
+- **confidence tier 0.80/0.65 → 0.90/0.84** เหตุผลเดียวกัน (0.65 จะติดทุกอย่าง)
+- **`final_score` คำนวณจาก fused RRF score ไม่ใช่ similarity** ตามสูตรในแผน
+  ถ้าใช้ similarity ผลของ BM25 หายหมด — วัดแล้ว top-1 ตกจาก 8/8 เหลือ 6/8
+- **A4 อยู่หลัง A3 ไม่ใช่ขนานกัน** เพราะ symptom_text สร้างจาก frame ของ A3
+- **เรียกว่า playbook ไม่ใช่ knowledge_doc** — ชื่อ knowledge ถูกใช้ไปแล้ว 2 ที่
+- **Qdrant อยู่ใน `deploy.sh` ไม่ใช่ docker-compose** — compose อยู่บน orphan branch
+
+### ที่ยังค้าง
+
+1. **merge branch เข้า main** — ยังไม่ทำ
+2. **Phase 4 Chronos forecast** — ยังไม่เริ่ม (`min_history_hours: 72`, hourly aggregate)
+3. **Grafana panel ใหม่** (Forecast band, Memory Hit Rate, Feedback Verdict, Confidence Source)
+   ติดปัญหาว่า dashboard อยู่บน orphan branch `godeyes`
+4. **⚠️ `searxng/settings.yml` บน branch `godeyes` drift จากที่รันจริง** — ยังเป็นของเดิม
+   ที่เปิด google/bing/ddg ถ้า redeploy จาก branch นั้นการจูน A2 ทั้งหมดจะถูกล้างกลับ
+   **ต้อง reconcile ก่อนใช้ branch นั้น deploy**
+5. **A2 ยังอ่อน** — SearXNG เหลือ engine ที่ตอบจริงไม่กี่ตัว ดู `docs/a2-status.md`
+   ทางเลือกที่ยังเปิดอยู่คือย้ายไป Perplexity Search API
+6. `_clean_error` ของ A2 ยังกลืน error code — ควรเปลี่ยนไปใช้ `normalize.py` ที่มีแล้ว
+7. หน้า pipeline ดูได้แค่ผลล่าสุด ถ้ารับ `?id=` จะ debug ง่ายขึ้นมาก
+
+### เอกสารที่เกี่ยวข้อง
+
+- `docs/a2-status.md` — ผลตรวจ A2 + สิ่งที่แก้ไป
+- `docs/playbooks.md` — playbook + service detection
+- `DEVELOPER.md` §10.5 — วิธีเพิ่ม playbook / reset collection / กับดักที่ต้องรู้
 
 ---
 
