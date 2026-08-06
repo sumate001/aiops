@@ -234,7 +234,11 @@ start_all() {
     sleep 4; ensure_searxng_json
   else
     log "creating SearXNG container on :$PORT_SEARXNG"
+    # Mount our settings.yml read-only. Without it the config lives only inside
+    # the container volume, has to be edited by hand with `docker exec`, and any
+    # rebuild silently reverts the engine tuning that A2 depends on.
     $DOCKER run -d --name aiops-searxng -p "${PORT_SEARXNG}:8080" \
+      -v "$SCRIPT_DIR/searxng/settings.yml:/etc/searxng/settings.yml:ro" \
       -e SEARXNG_SECRET="$(openssl rand -hex 32)" searxng/searxng:latest >/dev/null
     sleep 4; ensure_searxng_json
   fi

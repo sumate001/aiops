@@ -1,0 +1,58 @@
+# SearXNG config for the A2 web-search stage.
+#
+# THIS FILE IS THE SOURCE OF TRUTH. deploy.sh mounts it read-only into the
+# aiops-searxng container. It previously existed only inside the container
+# volume and was edited by hand with `docker exec`, so a rebuild silently
+# reverted every tuning decision below — see docs/a2-status.md.
+#
+# The mount only takes effect on a newly created container. After editing:
+#   docker rm -f aiops-searxng && bash deploy.sh
+#
+# Read the documentation before extending the defaults:
+# https://docs.searxng.org/admin/settings/
+
+use_default_settings: true
+
+server:
+  image_proxy: true
+
+search:
+  # A2 talks to SearXNG over the JSON API — without this it gets HTML back and
+  # Perplexica returns zero sources.
+  formats:
+    - html
+    - json
+
+engines:
+  # DuckDuckGo, Brave and Startpage CAPTCHA/429-ban this instance under the A2
+  # query rate — keep them off and lean on engines that tolerate automation.
+  - name: duckduckgo
+    disabled: true
+  - name: brave
+    disabled: true
+  - name: startpage
+    disabled: true
+
+  # Enabled, but observed answering "Suspended: access denied" on 2026-08-05.
+  # Left switched on deliberately: SearXNG un-suspends an engine by itself once
+  # it starts responding again, so removing them would forfeit that recovery.
+  - name: mojeek
+    disabled: false
+  - name: qwant
+    disabled: false
+
+  # API-backed engines that don't CAPTCHA — surfaced into the "general" category
+  # because Perplexica/A2 only ever searches that one category.
+  #
+  # As of 2026-08-05, stackoverflow is effectively A2's entire working corpus:
+  # everything above is either off or suspended. That is the main reason A2
+  # results are thin. If it stays this way the answer is a different backend
+  # (see the Perplexity Search API note in docs/a2-status.md), not more engines.
+  - name: wikipedia
+    disabled: false
+  - name: stackoverflow
+    disabled: false
+    categories: [general, it, q&a]
+  - name: github
+    disabled: false
+    categories: [general, it, repos]
