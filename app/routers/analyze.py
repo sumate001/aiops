@@ -16,16 +16,19 @@ from app.models.response import (
     MiroFishFrame,
     PerplexicaEnrichment,
     PerplexicaSource,
+    PredictionInfo,
     PropagationForecast,
     PropagationIncident,
     Sources,
     Synthesis,
     TopError,
+    TrendInfo,
 )
 from app.services import aiops_ml as ml_client
 from app.services import llm as llm_client
 from app.services import log_ml_client
 from app.services import mirofish
+from app.services import service_detector
 from app.services import synthesizer
 from app.services import perplexica_client
 from app.services import metrics
@@ -89,12 +92,15 @@ class _HostState:
     rule_result: synthesizer.SynthesisResult | None = None  # rule-only pass (drives A2 query)
     synth_result: synthesizer.SynthesisResult | None = None  # final (LLM judge if enabled)
 
+    # engine inferred from the log text (mysql | postgresql | mongodb) — A4 filter
+    detected_service: str | None = None
+
     # A2 outputs
     enrichment: PerplexicaEnrichment | None = None
 
-    # trend/prediction
-    trend: str = "stable"
-    prediction: dict | None = None
+    # trend/prediction — set by _phase1_a1, which always runs before the judge
+    trend: TrendInfo | None = None
+    prediction: PredictionInfo | None = None
 
     # Phase 3 topology outputs (หลักฐานเพิ่มให้ judge)
     propagation_lines: list[str] = field(default_factory=list)
@@ -112,6 +118,19 @@ async def _phase1_a1(st: _HostState) -> None:
         next((e.criticality for e in entries if e.criticality), None)
         or next((m.criticality for m in st.metric_samples if m.criticality), None)
     )
+
+    # Which DB engine is this? A4 uses it to filter memory/playbook hits.
+    # Trust the ingest label when it names an engine we know; sniff the log text
+    # otherwise, and accept None rather than a wrong guess.
+    if config.service_detection.enabled:
+        st.detected_service, svc_conf = service_detector.resolve_service(
+            next((e.service for e in entries if e.service), None),
+            [e.msg for e in entries if e.msg],
+            sample=config.service_detection.sample_lines,
+            min_confidence=config.service_detection.min_confidence,
+        )
+        logger.info("service detect — host=%s service=%s confidence=%.2f",
+                    st.hostname, st.detected_service or "unknown", svc_conf)
 
     st.error_count = sum(1 for e in entries if e.severity_number >= 17)
     st.warn_count = sum(1 for e in entries if 13 <= e.severity_number <= 16)
@@ -391,6 +410,16 @@ async def _phase4_a2(st: _HostState) -> None:
 # ── Phase 5: AA LLM judge (run all hosts in parallel) — sees A2's answer ──
 async def _phase5_aa_llm(st: _HostState) -> None:
     sy = config.llm.resolve("synthesizer")
+    # Only grounded research reaches the judge. When the web search returns no
+    # sources, Perplexica still answers — from its own model's memory, marking
+    # the text "[no source]" — and that prose is indistinguishable from real
+    # evidence once it's in the prompt. Withhold it rather than launder it.
+    research = None
+    if st.enrichment:
+        if st.enrichment.sources:
+            research = st.enrichment.answer
+        else:
+            logger.info("A2 answer withheld from judge — host=%s (0 sources)", st.hostname)
     st.synth_result = await synthesizer.synthesize(
         host=st.hostname,
         health_score=st.health_score,
@@ -399,7 +428,7 @@ async def _phase5_aa_llm(st: _HostState) -> None:
         rule_result=st.rule_result,
         trend=st.trend.model_dump() if st.trend else None,
         prediction=st.prediction.model_dump() if st.prediction else None,
-        perplexica_answer=st.enrichment.answer if st.enrichment else None,
+        perplexica_answer=research,
         top_errors=[e.model_dump() for e in st.top_errors],
         propagation_lines=st.propagation_lines,
         knowledge_lines=st.knowledge_lines,
@@ -437,6 +466,7 @@ def _build_host_analysis(st: _HostState) -> tuple[HostAnalysis, bool]:
 
     return HostAnalysis(
         host=st.hostname,
+        detected_service=st.detected_service,
         service_profile=st.service_profile,
         criticality=st.criticality,
         entry_count=len(st.entries),

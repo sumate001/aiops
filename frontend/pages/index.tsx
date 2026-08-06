@@ -9,7 +9,7 @@ type ResultRow   = { id: number; tenant_id: string; analyzed_at: string; health_
 type AnomalyScore  = { metric: string; score: number; severity: string; current_value?: number; baseline_mean?: number };
 type MiroFishFrame = { frame: string; lens: string; relevance: number; signal_hits: number; top_keywords: string[]; insight?: string };
 type Synthesis     = { root_cause_chain: string[]; confidence: number; fix_steps: string[]; method: string; top_frame?: string };
-type HostAnalysis  = { host: string; entry_count: number; error_count: number; warn_count: number; health_score: number; status: string; anomalies: AnomalyScore[]; mirofish: MiroFishFrame[]; synthesis?: Synthesis; enrichment?: { query: string; answer: string } };
+type HostAnalysis  = { host: string; entry_count: number; error_count: number; warn_count: number; health_score: number; status: string; anomalies: AnomalyScore[]; mirofish: MiroFishFrame[]; synthesis?: Synthesis; enrichment?: { query: string; answer: string; sources?: { title: string; url: string }[] } };
 type PropagationIncident = { node_id: string; label?: string; start_health: number; end_health: number; warn_at_minute?: number; crit_at_minute?: number; caused_by: string[]; trigger?: string };
 type PropagationForecast = { engine: string; horizon_minutes: number; seeded: Record<string, number>; incidents: PropagationIncident[] };
 type FullResult    = { tenant_id: string; analyzed_at: string; health_score: number; status: string; hosts: HostAnalysis[]; sources: { ollama_used: boolean; ollama_model: string }; propagation_forecast?: PropagationForecast | null };
@@ -214,8 +214,19 @@ export default function Dashboard() {
                   <p className="text-[10px] text-gray-400 font-mono line-clamp-2">{host.enrichment.query}</p>
                 </div>
                 <div>
-                  <p className="text-[9px] text-gray-600 mb-0.5">Context</p>
-                  <p className="text-[10px] text-violet-300 line-clamp-6 leading-relaxed">{host.enrichment.answer}</p>
+                  {/* Sourceless answers are Perplexica's model talking from memory,
+                      not research — the backend keeps them out of the judge prompt,
+                      so don't let them read as evidence here either. */}
+                  {(host.enrichment.sources?.length ?? 0) > 0 ? (
+                    <p className="text-[9px] text-gray-600 mb-0.5">
+                      Context · {host.enrichment.sources!.length} sources
+                    </p>
+                  ) : (
+                    <p className="text-[9px] text-amber-500 mb-0.5">⚠ 0 sources — ไม่ได้ส่งให้ AA</p>
+                  )}
+                  <p className={`text-[10px] line-clamp-6 leading-relaxed ${
+                    (host.enrichment.sources?.length ?? 0) > 0 ? "text-violet-300" : "text-gray-500 italic"
+                  }`}>{host.enrichment.answer}</p>
                 </div>
               </div>
             ) : (
@@ -256,7 +267,11 @@ export default function Dashboard() {
         </div>
 
         {/* AA Synthesizer */}
-        <AgentBox label="AA Synthesizer" desc="LLM-as-Judge — รับ output จาก A1+A2+A3 ทั้งหมด" statusKey="AA_synthesizer" borderColor="border-green-800" agents={pipeStatus?.agents}>
+        {/* A2 only reaches the judge when its answer is backed by sources —
+            saying "A1+A2+A3 ทั้งหมด" unconditionally would overstate the evidence. */}
+        <AgentBox label="AA Synthesizer" desc={`LLM-as-Judge — รับ output จาก A1+A3${
+          host?.enrichment && !(host.enrichment.sources?.length ?? 0) ? " (A2 ถูกกัน: 0 sources)" : "+A2"
+        }`} statusKey="AA_synthesizer" borderColor="border-green-800" agents={pipeStatus?.agents}>
           <div className="grid grid-cols-2 gap-4">
             {/* left: root cause */}
             <div>

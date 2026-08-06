@@ -151,12 +151,34 @@ _QUERY_NOISE = re.compile(
 )
 
 
+# Grammar filler that survives _QUERY_NOISE but carries no search signal. Kept
+# deliberately small: domain words ("failed", "timeout", "refused") must stay.
+_STOPWORDS = frozenset("""
+    a an the and or but if of in on at to for from by with is was are were be
+    been being it its this that these those when while trying try get got has
+    have had do does did not no
+""".split())
+
+
 def _clean_error(msg: str) -> str:
     """Reduce a raw error line to a short, searchable keyword phrase."""
     text = _QUERY_NOISE.sub(" ", msg.lower())
     text = re.sub(r"[^a-z0-9 ]+", " ", text)
-    words = [w for w in text.split() if len(w) > 1]
-    return " ".join(words[:8])
+    words = [w for w in text.split() if len(w) > 1 and w not in _STOPWORDS]
+    return " ".join(words[:6])
+
+
+# The surviving SearXNG engines match near-literally and intersect their terms,
+# so every extra concept shrinks the result set instead of refining it.
+# Measured against this instance on 2026-08-05:
+#   "deadlock"                          → 24 results
+#   "slow query"                        → 13
+#   "slow query deadlock troubleshooting" → 0     ← both good phrases, combined
+# The old builder concatenated frame + 3 keywords + an 8-word error phrase into
+# ~13-word queries that returned nothing — and on an empty result set Perplexica
+# still answers, from the model's own memory, with no sources at all.
+# So: pick the single most specific signal, keep it to three words, and stop.
+_MAX_QUERY_WORDS = 3
 
 
 def build_query(
@@ -166,25 +188,27 @@ def build_query(
     host: str,
     anomaly_metrics: list[str] | None = None,
 ) -> str:
-    """Build a clean, natural web-search query. Keeps it concise (frame +
-    keywords + a de-noised error phrase) so the search model actually searches
-    instead of answering from memory. Returns "" when there is no searchable
-    evidence (a hostname alone finds nothing useful) — callers should skip A2."""
-    parts: list[str] = []
-    if top_frame:
-        parts.append(top_frame.lower())
+    """Build a short, searchable web query from the single strongest signal.
+
+    Returns "" when there is no searchable evidence — callers should skip A2.
+    `top_frame` and `host` are deliberately unused: a bare frame ("hardware")
+    or hostname does return results, but generic ones, which are worse than no
+    research at all because they pass the judge's source gate while saying
+    nothing about this incident.
+    """
+    def trim(text: str) -> str:
+        return " ".join(text.lower().split()[:_MAX_QUERY_WORDS])
+
+    # Frame keywords are curated single concepts ("deadlock", "connection
+    # refused") — the best search terms available. The de-noised error phrase is
+    # the fallback; anomalous metric names cover metrics-only windows.
     if top_keywords:
-        parts.append(" ".join(top_keywords[:3]))
+        return trim(top_keywords[0])
     if top_error_msgs:
-        err = _clean_error(top_error_msgs[0])
-        if err:
-            parts.append(err)
-    if not parts and anomaly_metrics:
-        # Metrics-only window: search on the anomalous metric names instead.
-        parts.append(" ".join(m.replace("_", " ") for m in anomaly_metrics[:2]) + " high")
-    if not parts:
-        return ""
-    return " ".join(parts) + " troubleshooting"
+        return trim(_clean_error(top_error_msgs[0]))
+    if anomaly_metrics:
+        return trim(anomaly_metrics[0].replace("_", " ") + " high")
+    return ""
 
 
 async def _do_search(
