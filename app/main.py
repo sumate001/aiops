@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse, Response
 from app.config import config
 from app.routers import analyze, health, ingest
 from app.routers import config_router, feedback_router, results_router, topology
-from app.services import embedder, perplexica_client, research_worker
+from app.services import embedder, forecast, perplexica_client, research_worker
 from app.services.baseline_store import init_db
 from app.services.knowledge_store import enqueue_all_tenants, init_knowledge_table
 from app.services.feedback_store import init_feedback_tables
@@ -48,6 +48,10 @@ async def lifespan(app: FastAPI):
     # inside the first request would blow the latency budget on its own.
     if config.memory.enabled:
         asyncio.create_task(embedder.warm_up())
+    # A1b as well — Chronos takes a while to load and the analyze path budgets
+    # only 5s for the whole forecast.
+    if config.forecast.enabled:
+        asyncio.create_task(forecast.warm_up())
     # Phase 2: background research queue — เก็บ known issues ต่อ (software, version)
     worker_task = asyncio.create_task(research_worker.run_forever())
     yield

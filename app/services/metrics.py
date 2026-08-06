@@ -211,3 +211,36 @@ def record_prediction_outcome(
         predicted_risk_level=predicted_risk_level,
         actual_outcome=actual_outcome,
     ).inc()
+
+
+# ── A1b forecast ─────────────────────────────────────────────────────────────
+host_forecast_p10 = Gauge(
+    "godeyes_host_forecast_p10", "A1b forecast lower bound", ["host", "metric"]
+)
+host_forecast_p50 = Gauge(
+    "godeyes_host_forecast_p50", "A1b forecast median", ["host", "metric"]
+)
+host_forecast_p90 = Gauge(
+    "godeyes_host_forecast_p90", "A1b forecast upper bound", ["host", "metric"]
+)
+host_forecast_breach = Gauge(
+    "godeyes_host_forecast_breach",
+    "1 when the actual value fell outside the forecast band",
+    ["host", "metric"],
+)
+
+
+def record_forecast(
+    host: str, metric: str, p10: float, p50: float, p90: float, breach: bool
+) -> None:
+    """Publish one forecast band.
+
+    Compare the breach count here against A1's anomaly count: the whole point of
+    A1b is that it should fire *less*, because a metric that is high every night
+    at the same hour is this host behaving normally, not an incident.
+    """
+    labels = {"host": host, "metric": metric}
+    host_forecast_p10.labels(**labels).set(p10)
+    host_forecast_p50.labels(**labels).set(p50)
+    host_forecast_p90.labels(**labels).set(p90)
+    host_forecast_breach.labels(**labels).set(1 if breach else 0)

@@ -22,3 +22,6 @@ fastembed>=0.8.0
 # wheels — this box has no GPU:
 #   pip install --index-url https://download.pytorch.org/whl/cpu torch
 sentence-transformers>=5.0.0
+
+# A1b forecast (Phase 4) — amazon/chronos-bolt-small
+chronos-forecasting>=2.0.0

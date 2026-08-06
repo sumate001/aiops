@@ -266,6 +266,7 @@ def _build_judge_prompt(
     propagation_lines: list[str] | None = None,
     knowledge_lines: list[str] | None = None,
     memory_hits: list | None = None,
+    forecast_bands: list | None = None,
 ) -> str:
     relevant_frames = [f for f in mirofish_frames if f["relevance"] > 0]
     frame_lines = []
@@ -312,6 +313,7 @@ def _build_judge_prompt(
             predictor_block += f"\n  trend={trend.get('direction')} slope/hr={trend.get('slope_per_hour')}"
 
     memory_block, playbook_block = _memory_blocks(memory_hits or [])
+    forecast_block = _forecast_block(forecast_bands or [])
 
     return f"""You are an AIOps LLM Judge for a POS (Point-of-Sale) retail system.
 Your job is root-cause analysis: trace the observed symptoms back to the single
@@ -333,6 +335,9 @@ Multi-frame analysis (A3 MiroFish):
 
 Predictor (trend+risk):
 {predictor_block}
+
+การพยากรณ์เชิงสถิติ (A1b — เทียบกับพฤติกรรมของ host นี้เองในอดีต ณ เวลาเดียวกัน):
+{forecast_block}
 
 Rule-based chain (baseline):
 {rule_chain_block}
@@ -376,6 +381,10 @@ Rules:
   corroborate or add detail to a cause already supported by the evidence above, never as the
   sole basis for root_cause_chain
 - If evidence is weak, say so explicitly in root_cause_chain and reflect it in confidence
+- **metric ที่ A1b บอกว่า "อยู่ในกรอบ" คือพฤติกรรมปกติของ host นี้ตามเวลานั้น**
+  ต่อให้ตัวเลขดูสูงก็ห้ามตีเป็นปัญหา — เช่น error พุ่งทุกตี 2 เพราะ batch job
+  คือเรื่องปกติ ไม่ใช่ incident · ให้สนใจตัวที่ "หลุดกรอบ" และยิ่ง breach_magnitude
+  สูงยิ่งผิดปกติมาก (วัดเป็นเท่าของความกว้างกรอบ เทียบข้าม metric ได้)
 
 กติกาเรื่อง INTERNAL MEMORY และ PLAYBOOK:
 1. ถ้ามีเคสใน INTERNAL MEMORY ที่ "✓ ยืนยันแล้วโดยคน" และตรงกันสูง ให้ยึดเป็นหลัก
@@ -392,6 +401,26 @@ Rules:
    ก่อนขั้นตอนที่ลงมือแก้ เพื่อให้คนยืนยันก่อนทำ
 7. ถ้า INTERNAL MEMORY (ที่ยืนยันแล้ว) ขัดกับ PLAYBOOK ให้ยึด INTERNAL MEMORY
    แล้วบอกว่าต่างจากตำราตรงไหน"""
+
+
+def _forecast_block(bands: list) -> str:
+    """Render A1b bands.
+
+    Phrased so "in band" reads as a positive statement about normality, not as
+    an absence of information — the judge's most useful move here is to *stop*
+    treating a large-but-seasonal number as evidence.
+    """
+    if not bands:
+        return "  (ยังไม่มีประวัติพอสำหรับพยากรณ์)"
+    lines = []
+    for b in bands:
+        verdict = (f"หลุดกรอบ (magnitude {b.breach_magnitude:.2f} เท่าของความกว้างกรอบ)"
+                   if b.breach else "อยู่ในกรอบ = ปกติสำหรับ host นี้ ณ เวลานี้")
+        lines.append(
+            f"  {b.metric:14s} คาดว่า {b.p10:.1f}–{b.p90:.1f} (กลาง {b.p50:.1f}) · "
+            f"จริง {b.actual:.1f} → {verdict}"
+        )
+    return "\n".join(lines)
 
 
 def _memory_blocks(memory_hits: list) -> tuple[str, str]:
@@ -466,6 +495,7 @@ async def synthesize(
     propagation_lines: list[str] | None = None,
     knowledge_lines: list[str] | None = None,
     memory_hits: list | None = None,
+    forecast_bands: list | None = None,
     ollama_generate=None,
     model: str = "",
     base_url: str = "",
@@ -488,6 +518,7 @@ async def synthesize(
         propagation_lines=propagation_lines,
         knowledge_lines=knowledge_lines,
         memory_hits=memory_hits,
+        forecast_bands=forecast_bands,
     )
     try:
         raw = await ollama_generate(

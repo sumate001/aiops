@@ -113,3 +113,24 @@ memory:
     engines: ["mysql", "postgresql", "mongodb"]
     kind_weight: 1.2          # ต่ำกว่า verified analysis (1.6) โดยตั้งใจ
     reserve_analysis_slots: 1 # กัน slot ให้เคสจริงอย่างน้อย 1
+
+# A1b — Chronos time-series forecast (จับ anomaly ที่รู้ฤดูกาล ลด false positive จาก A1)
+# A1 (Isolation Forest) ถาม "แปลกเมื่อเทียบกับ feature อื่นไหม" — ไม่รู้จักเวลา
+# A1b ถาม "แปลกเมื่อเทียบกับตัวเองในอดีต ณ เวลาเดียวกันไหม"
+# metric ที่อยู่ในกรอบ = พฤติกรรมปกติของ host นั้นตามเวลานั้น ต่อให้ตัวเลขดูสูง
+forecast:
+  enabled: true
+  model: "amazon/chronos-bolt-small"
+  device: "cpu"
+  # แผนเดิมใส่ 72 (3 วัน) แต่วัดจริงแล้วไม่พอ — host ที่ error พุ่งทุกตี 2
+  # พอพยากรณ์ตี 2 ของวันถัดไป (ที่ spike ตามปกติ) ได้ผลดังนี้:
+  #   3 วัน → p90 21.5 เทียบ actual 40 → breach  (false positive แบบที่ A1b มีไว้กำจัด)
+  #   5 วัน → p90 41.2 → ไม่ breach
+  #   7 วัน → p90 43.4 → ไม่ breach (magnitude 0.33)
+  # 3 รอบพอให้โมเดล "เห็น" ว่ามี spike แต่ยังกะขนาดไม่ถูก · ต่ำกว่า ~120h เจอ false positive
+  min_history_hours: 168
+  aggregate_resolution: "hourly"   # hourly | 6h
+  prediction_length: 12            # ห้ามเกิน 64 — อยากมองไกลกว่านี้ให้ลด resolution
+  metrics: ["error_count", "warn_count", "anomaly_score", "health_score"]
+  timeout_seconds: 5.0
+  warm_up_on_startup: true

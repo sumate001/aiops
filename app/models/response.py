@@ -81,6 +81,23 @@ class Explanation(BaseModel):
     suggested_actions: list[str] = []
 
 
+class ForecastBand(BaseModel):
+    """A1b — what this host's own history says to expect right now.
+
+    A metric inside the band is normal behaviour *for this host at this hour*,
+    however large the absolute value looks. `breach_magnitude` is measured in
+    band-widths, so it stays comparable between a host that swings 0-500 and one
+    that sits at 0-5.
+    """
+    metric: str
+    p10: float
+    p50: float
+    p90: float
+    actual: float | None = None
+    breach: bool = False
+    breach_magnitude: float = 0.0
+
+
 class MemoryHit(BaseModel):
     """One recalled case (A4). Two scores, deliberately kept apart:
 
@@ -128,6 +145,7 @@ class HostAnalysis(BaseModel):
     synthesis: Synthesis | None = None
     enrichment: PerplexicaEnrichment | None = None
     memory_hits: list[MemoryHit] = []
+    forecast: list[ForecastBand] = []
 
 
 class PropagationIncident(BaseModel):

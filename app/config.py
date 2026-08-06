@@ -69,6 +69,27 @@ class MemoryConfig(BaseModel):
     playbook_pack: PlaybookPackConfig = PlaybookPackConfig()
 
 
+class ForecastConfig(BaseModel):
+    """A1b — Chronos time-series forecast (seasonal anomaly detection)."""
+    enabled: bool = True
+    model: str = "amazon/chronos-bolt-small"
+    device: str = "cpu"
+    # The plan said 72h (3 days). Measured on a synthetic host that spikes every
+    # 02:00, forecasting the next day's 02:00 with the spike present as usual:
+    #   3 days  → p90 21.5 vs actual 40 → BREACH   (the false positive this
+    #                                               feature exists to remove)
+    #   5 days  → p90 41.2 → no breach
+    #   7 days  → p90 43.4 → no breach, magnitude 0.33
+    # Three cycles is enough for the model to notice the spike but not to size
+    # it. 7 days is the default; below ~120h expect false positives.
+    min_history_hours: int = 168
+    aggregate_resolution: str = "hourly"   # hourly | 6h
+    prediction_length: int = 12            # keep <= 64; look further by lowering resolution
+    metrics: list[str] = ["error_count", "warn_count", "anomaly_score", "health_score"]
+    timeout_seconds: float = 5.0
+    warm_up_on_startup: bool = True
+
+
 class ServiceDetectionConfig(BaseModel):
     """Infer the DB engine from log text so A4 can filter by service."""
     enabled: bool = True
@@ -208,6 +229,7 @@ class AppConfig(BaseModel):
     analysis: AnalysisConfig = AnalysisConfig()
     service_detection: ServiceDetectionConfig = ServiceDetectionConfig()
     memory: MemoryConfig = MemoryConfig()
+    forecast: ForecastConfig = ForecastConfig()
 
 
 def _parse_timeout(value: str) -> float:

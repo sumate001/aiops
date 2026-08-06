@@ -127,6 +127,49 @@ def get_recent_windows(host: str, limit: int = 20) -> list[dict]:
         c.close()
 
 
+def get_hourly_series(host: str, metric: str, hours: int = 168) -> list[tuple[str, float]]:
+    """Roll window_stats up into one point per hour, oldest first.
+
+    Forecasting needs this resolution, not the raw 5-minute windows. To see a
+    daily rhythm at all a model has to observe the cycle repeat two or three
+    times; at 5-minute granularity the 48 windows the original plan suggested
+    cover four hours, which is not even one full day. Hourly buckets over three
+    days give three complete cycles in a series short enough to forecast on.
+
+    Counts are summed within the hour, scores averaged — summing a health score
+    would be meaningless.
+    """
+    SUMMED = {"error_count", "warn_count", "entry_count", "crash_count",
+              "auth_fail_count", "db_err_count", "network_err_count"}
+    AVERAGED = {"health_score", "error_rate", "anomaly_score"}
+
+    if metric == "anomaly_score":
+        # Not a stored column: derived as the inverse of health so a rising
+        # series means "getting worse" for every forecast metric alike.
+        expr, agg = "AVG(1.0 - health_score / 100.0)", "avg"
+    elif metric in SUMMED:
+        expr, agg = f"SUM({metric})", "sum"
+    elif metric in AVERAGED:
+        expr, agg = f"AVG({metric})", "avg"
+    else:
+        raise ValueError(f"unknown metric for hourly series: {metric}")
+
+    c = _conn()
+    try:
+        rows = c.execute(f"""
+            SELECT strftime('%Y-%m-%dT%H:00:00Z', window_from) AS bucket,
+                   {expr} AS value
+            FROM window_stats
+            WHERE host = ?
+              AND window_from >= datetime('now', ?)
+            GROUP BY bucket
+            ORDER BY bucket ASC
+        """, (host, f"-{int(hours)} hours")).fetchall()
+        return [(r["bucket"], float(r["value"] or 0.0)) for r in rows]
+    finally:
+        c.close()
+
+
 def get_same_hour_baseline(
     host: str, hour_of_day: int, day_type: str, min_samples: int = 3
 ) -> dict | None:
