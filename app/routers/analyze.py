@@ -28,6 +28,7 @@ from app.services import aiops_ml as ml_client
 from app.services import llm as llm_client
 from app.services import log_ml_client
 from app.services import mirofish
+from app.services import feedback_store
 from app.services import memory_store
 from app.services import normalize
 from app.services import service_detector
@@ -401,11 +402,21 @@ async def _phase2_5_a4(st: _HostState) -> None:
                 service=st.detected_service,
                 limit=config.memory.top_k,
                 prefer_verified=config.memory.prefer_verified,
+                # Playbooks this tenant has retired. Shared points can't carry
+                # that flag themselves — see feedback_store.
+                exclude_ids=feedback_store.deprecated_playbook_ids(st.tenant_id),
             ),
             timeout=config.memory.timeout_seconds,
         )
         logger.info("A4 memory — host=%s hits=%d (%s)", st.hostname, len(st.memory_hits),
                     ", ".join(f"{h.kind}:{h.similarity:.2f}" for h in st.memory_hits) or "none")
+        for h in st.memory_hits:
+            if h.kind == memory_store.KIND_PLAYBOOK:
+                metrics.playbook_hits_total.labels(engine=st.detected_service or "unknown").inc()
+            else:
+                metrics.memory_hits_total.inc()
+                if h.verified:
+                    metrics.memory_verified_hits_total.inc()
     except (asyncio.TimeoutError, Exception) as exc:
         logger.warning("A4 memory search failed, continuing without: %s", exc)
         st.memory_hits = []
@@ -491,8 +502,11 @@ async def _phase5_aa_llm(st: _HostState) -> None:
         timeout=LLM_TIMEOUT,
         temperature=config.llm.temperature,
     )
-    logger.info("AA done — host=%s top_frame=%s confidence=%.2f",
-                st.hostname, st.synth_result.top_frame, st.synth_result.confidence)
+    if st.synth_result.memory_influenced:
+        metrics.synthesis_memory_influenced_total.inc()
+    logger.info("AA done — host=%s top_frame=%s confidence=%.2f memory_influenced=%s",
+                st.hostname, st.synth_result.top_frame, st.synth_result.confidence,
+                st.synth_result.memory_influenced)
 
 
 # ── Build final HostAnalysis from state ────────────────────────────────────
@@ -697,6 +711,14 @@ async def _persist_to_memory(states: list[_HostState], result_id: str) -> None:
                     fix_steps=st.synth_result.fix_steps,
                     confidence=st.synth_result.confidence,
                 )
+                if point_id:
+                    # Remember which point this (result, host) produced so
+                    # feedback can find it later. Looking it up by the result_id
+                    # in the payload would miss deduplicated cases, which keep
+                    # the first occurrence's id.
+                    feedback_store.link_memory_point(
+                        result_id, st.hostname, st.tenant_id, point_id
+                    )
                 logger.info("A4 memory stored — host=%s point=%s", st.hostname, point_id)
             except Exception as exc:
                 logger.warning("A4 memory upsert failed for %s: %s", st.hostname, exc)

@@ -9,10 +9,11 @@ from fastapi.responses import JSONResponse, Response
 
 from app.config import config
 from app.routers import analyze, health, ingest
-from app.routers import config_router, results_router, topology
+from app.routers import config_router, feedback_router, results_router, topology
 from app.services import embedder, perplexica_client, research_worker
 from app.services.baseline_store import init_db
 from app.services.knowledge_store import enqueue_all_tenants, init_knowledge_table
+from app.services.feedback_store import init_feedback_tables
 from app.services.result_store import init_result_table
 from app.services.topology_store import init_topology_tables
 
@@ -27,6 +28,7 @@ async def lifespan(app: FastAPI):
     _setup_logging()
     init_db()
     init_result_table()
+    init_feedback_tables()
     init_topology_tables()
     init_knowledge_table()
     enqueue_all_tenants()
@@ -77,6 +79,7 @@ app.include_router(analyze.router)
 app.include_router(ingest.router)
 app.include_router(config_router.router)
 app.include_router(results_router.router)
+app.include_router(feedback_router.router)
 app.include_router(topology.router)
 # frontend proxy ส่งเฉพาะ /api/* — mount ซ้ำใต้ /api ให้หน้า Settings ใช้
 app.include_router(topology.router, prefix="/api")

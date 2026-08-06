@@ -264,9 +264,16 @@ class MemoryStore:
         frame: str | None = None,
         limit: int = 3,
         prefer_verified: bool = True,
+        exclude_ids: set[str] | None = None,
     ) -> list:
         """Hybrid search. `tenant_id` has no default — omitting it is a
-        TypeError at the call site rather than a silent cross-tenant read."""
+        TypeError at the call site rather than a silent cross-tenant read.
+
+        `exclude_ids` drops points this tenant has retired. Shared playbooks
+        can't carry a `deprecated` flag of their own — one tenant setting it
+        would hide the entry from everyone, and re-seeding would undo it — so
+        that state lives per-tenant in SQLite and arrives here as a filter.
+        """
         from qdrant_client import models
 
         if not query_text:
@@ -297,8 +304,11 @@ class MemoryStore:
             logger.warning("Memory search failed: %s", exc)
             return []
 
-        max_fused = max((float(p.score or 0.0) for p in result.points), default=1.0)
-        hits = [self._to_hit(p, query_vec, max_fused) for p in result.points]
+        points = result.points
+        if exclude_ids:
+            points = [p for p in points if str(p.id) not in exclude_ids]
+        max_fused = max((float(p.score or 0.0) for p in points), default=1.0)
+        hits = [self._to_hit(p, query_vec, max_fused) for p in points]
         # min_score gates on raw similarity, never on final_score — otherwise a
         # verified but barely-relevant case sails through on its 1.6 multiplier.
         hits = [h for h in hits if h.similarity >= self.min_score]
