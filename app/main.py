@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse, Response
 from app.config import config
 from app.routers import analyze, health, ingest
 from app.routers import config_router, results_router, topology
-from app.services import perplexica_client, research_worker
+from app.services import embedder, perplexica_client, research_worker
 from app.services.baseline_store import init_db
 from app.services.knowledge_store import enqueue_all_tenants, init_knowledge_table
 from app.services.result_store import init_result_table
@@ -42,6 +42,10 @@ async def lifespan(app: FastAPI):
     # embedding cold-start. Non-blocking: readiness/health come up immediately.
     if config.perplexica.enabled:
         asyncio.create_task(perplexica_client.warm_up())
+    # Same idea for A4: loading the embedding model takes ~30s, and paying that
+    # inside the first request would blow the latency budget on its own.
+    if config.memory.enabled:
+        asyncio.create_task(embedder.warm_up())
     # Phase 2: background research queue — เก็บ known issues ต่อ (software, version)
     worker_task = asyncio.create_task(research_worker.run_forever())
     yield

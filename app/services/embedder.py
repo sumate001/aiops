@@ -153,3 +153,11 @@ async def warm_up() -> None:
     # to_thread: loading is CPU-bound and synchronous, and must not block the
     # event loop while the rest of the app finishes starting.
     await asyncio.to_thread(get_embedder().warm_up)
+
+    # The sparse (BM25) encoder loads lazily too, and its load would otherwise
+    # happen inside the first search's 2s timeout.
+    from app.services.memory_store import get_store
+    try:
+        await asyncio.to_thread(get_store().warm_up)
+    except Exception as exc:
+        logger.error("Memory store warm-up failed: %s", exc)

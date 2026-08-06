@@ -486,6 +486,20 @@ class MemoryStore:
             points=[point_id],
         )
 
+    def warm_up(self) -> None:
+        """Load the BM25 encoder ahead of the first search.
+
+        Warming only the dense embedder is not enough: fastembed loads its model
+        lazily too, and that load runs *inside* the 2s search timeout. The first
+        real A4 query then always times out — so the very first analysis after a
+        restart is the one case that silently gets no memory at all.
+        """
+        try:
+            self._sparse_vector("warmup", is_query=True)
+            logger.info("Memory sparse encoder warm-up done")
+        except Exception as exc:
+            logger.error("Memory warm-up failed — A4 will degrade: %s", exc)
+
     def get(self, point_id: str):
         pts = self.client.retrieve(self.collection, ids=[point_id], with_payload=True)
         return pts[0] if pts else None

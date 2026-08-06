@@ -28,6 +28,8 @@ from app.services import aiops_ml as ml_client
 from app.services import llm as llm_client
 from app.services import log_ml_client
 from app.services import mirofish
+from app.services import memory_store
+from app.services import normalize
 from app.services import service_detector
 from app.services import synthesizer
 from app.services import perplexica_client
@@ -94,6 +96,11 @@ class _HostState:
 
     # engine inferred from the log text (mysql | postgresql | mongodb) — A4 filter
     detected_service: str | None = None
+
+    # A4 memory
+    tenant_id: str = "internal"
+    symptom_text: str = ""
+    memory_hits: list = field(default_factory=list)
 
     # A2 outputs
     enrichment: PerplexicaEnrichment | None = None
@@ -264,6 +271,7 @@ async def _phase3_aa_rule(st: _HostState) -> None:
         mirofish_frames=st.mirofish_frames,
         trend=st.trend.model_dump() if st.trend else None,
         prediction=st.prediction.model_dump() if st.prediction else None,
+        memory_hits=st.memory_hits,
     )
     logger.info("AA rule done — host=%s top_frame=%s", st.hostname, st.rule_result.top_frame)
 
@@ -360,6 +368,49 @@ def _run_propagation(tenant_id: str, states: list["_HostState"]) -> PropagationF
         return None
 
 
+# ── Phase 2.5: A4 — memory recall (Qdrant) ──
+# Runs after A3 rather than beside it, as the plan sketched: symptom_text is
+# built from the frames A3 produces, and a query without them retrieves
+# noticeably worse. The cost is one extra sequential stage of a few hundred ms.
+async def _phase2_5_a4(st: _HostState) -> None:
+    if not config.memory.enabled:
+        return
+
+    st.symptom_text = normalize.build_symptom_text(
+        host=st.hostname,
+        service=st.detected_service,
+        status=st.status,
+        health_score=st.health_score,
+        top_keywords=[k for f in st.mirofish_frames for k in f.get("top_keywords", [])],
+        frames=st.mirofish_frames,
+        anomaly_score=max((a.score for a in st.anomalies), default=None),
+        error_msgs=st.top_error_msgs,
+    )
+    if not st.symptom_text:
+        return
+
+    try:
+        store = memory_store.get_store()
+        # Memory is an enhancement, never a dependency — a slow or dead Qdrant
+        # must cost us the recall, not the analysis.
+        st.memory_hits = await asyncio.wait_for(
+            asyncio.to_thread(
+                store.search,
+                st.symptom_text,
+                st.tenant_id,
+                service=st.detected_service,
+                limit=config.memory.top_k,
+                prefer_verified=config.memory.prefer_verified,
+            ),
+            timeout=config.memory.timeout_seconds,
+        )
+        logger.info("A4 memory — host=%s hits=%d (%s)", st.hostname, len(st.memory_hits),
+                    ", ".join(f"{h.kind}:{h.similarity:.2f}" for h in st.memory_hits) or "none")
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.warning("A4 memory search failed, continuing without: %s", exc)
+        st.memory_hits = []
+
+
 # ── Phase 4: A2 — Perplexica (slow LLM, run one host at a time) ──
 async def _phase4_a2(st: _HostState) -> None:
     if not config.perplexica.enabled:
@@ -432,6 +483,7 @@ async def _phase5_aa_llm(st: _HostState) -> None:
         top_errors=[e.model_dump() for e in st.top_errors],
         propagation_lines=st.propagation_lines,
         knowledge_lines=st.knowledge_lines,
+        memory_hits=st.memory_hits,
         use_llm=config.llm.enabled,
         ollama_generate=partial(llm_client.generate, provider=sy.provider, api_key=sy.api_key),
         model=sy.model,
@@ -455,6 +507,10 @@ def _build_host_analysis(st: _HostState) -> tuple[HostAnalysis, bool]:
         top_frame_lens=sr.top_frame_lens,
         anomaly_methods=sr.anomaly_methods,
         reasoning=sr.reasoning,
+        memory_refs=sr.memory_refs,
+        memory_influenced=sr.memory_influenced,
+        playbook_refs=sr.playbook_refs,
+        playbook_influenced=sr.playbook_influenced,
     ) if sr else Synthesis(
         root_cause_chain=[], confidence=0.0, fix_steps=[], method="rule",
         top_frame=None, top_frame_lens=None, anomaly_methods=[], reasoning=None,
@@ -467,6 +523,7 @@ def _build_host_analysis(st: _HostState) -> tuple[HostAnalysis, bool]:
     return HostAnalysis(
         host=st.hostname,
         detected_service=st.detected_service,
+        memory_hits=st.memory_hits,
         service_profile=st.service_profile,
         criticality=st.criticality,
         entry_count=len(st.entries),
@@ -538,6 +595,7 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             window_to=window_to,
             predict_result=predict_results[h],
             total_entry_count=raw_totals.get(h, 0),
+            tenant_id=req.tenant_id,
         )
         for h in all_hosts
     ]
@@ -549,6 +607,10 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     # ── Phase 2: A3 MiroFish — all hosts in parallel (fast) ──
     logger.info("=== Phase 2: A3 MiroFish — %d hosts ===", len(states))
     await asyncio.gather(*[_phase2_a3(st) for st in states])
+
+    # ── Phase 2.5: A4 memory recall — all hosts in parallel (needs A3's frames) ──
+    logger.info("=== Phase 2.5: A4 memory — %d hosts ===", len(states))
+    await asyncio.gather(*[_phase2_5_a4(st) for st in states])
 
     # ── Phase 3: AA rule pass — all hosts in parallel (fast, no LLM) ──
     logger.info("=== Phase 3: AA rule pass — %d hosts ===", len(states))
@@ -602,5 +664,41 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         propagation_forecast=prop_forecast,
     )
 
-    save_result(response.model_dump(mode="json"))
+    result_id = save_result(response.model_dump(mode="json"))
+
+    # Index into memory without making the caller wait: embedding + upsert costs
+    # a few hundred ms per host and adds nothing to this response. A failure here
+    # means we don't remember this window — not that the analysis failed.
+    if config.memory.enabled and result_id is not None:
+        asyncio.create_task(_persist_to_memory(states, str(result_id)))
+
     return response
+
+
+async def _persist_to_memory(states: list[_HostState], result_id: str) -> None:
+    """Fire-and-forget write of each host's analysis into A4 memory."""
+    try:
+        store = memory_store.get_store()
+        await asyncio.to_thread(store.ensure_collection)
+        for st in states:
+            if not st.symptom_text or not st.synth_result:
+                continue
+            try:
+                point_id = await asyncio.to_thread(
+                    store.upsert_analysis,
+                    st.symptom_text,
+                    st.tenant_id,
+                    st.hostname,
+                    result_id,
+                    service=st.detected_service,
+                    frame=st.synth_result.top_frame,
+                    severity=st.status,
+                    root_cause_chain=st.synth_result.root_cause_chain,
+                    fix_steps=st.synth_result.fix_steps,
+                    confidence=st.synth_result.confidence,
+                )
+                logger.info("A4 memory stored — host=%s point=%s", st.hostname, point_id)
+            except Exception as exc:
+                logger.warning("A4 memory upsert failed for %s: %s", st.hostname, exc)
+    except Exception as exc:
+        logger.warning("A4 memory persist skipped: %s", exc)
