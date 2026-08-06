@@ -1,31 +1,62 @@
+# SearXNG config for the A2 web-search stage.
+#
+# ⚠️ MIRROR — the source of truth is `searxng/settings.yml` on the **main**
+# branch, which deploy.sh mounts read-only into the aiops-searxng container.
+# This copy exists for the compose stack; keep the two in sync.
+#
+# It drifted badly once already: this file still listed google/bing/duckduckgo
+# as plain-enabled long after the live instance had disabled them for
+# CAPTCHA-banning us, so deploying from this branch would have reverted every
+# A2 fix. See docs/a2-status.md on main.
+#
+# Note that the compose stack's `vane` service bundles its own SearXNG and does
+# not currently mount this file — wire it up before relying on it here.
+#
+# Read the documentation before extending the defaults:
+# https://docs.searxng.org/admin/settings/
+
 use_default_settings: true
 
 server:
-  secret_key: "godeyes-searxng-secret-change-me"
-  limiter: false
-  image_proxy: false
+  image_proxy: true
 
 search:
-  safe_search: 0
-  autocomplete: ""
-  default_lang: "en"
+  # A2 talks to SearXNG over the JSON API — without this it gets HTML back and
+  # Perplexica returns zero sources.
   formats:
     - html
     - json
 
 engines:
-  - name: google
-    engine: google
-    shortcut: g
+  # DuckDuckGo, Brave and Startpage CAPTCHA/429-ban this instance under the A2
+  # query rate — keep them off and lean on engines that tolerate automation.
   - name: duckduckgo
-    engine: duckduckgo
-    shortcut: ddg
-  - name: bing
-    engine: bing
-    shortcut: bi
+    disabled: true
+  - name: brave
+    disabled: true
+  - name: startpage
+    disabled: true
+
+  # Enabled, but observed answering "Suspended: access denied" on 2026-08-05.
+  # Left switched on deliberately: SearXNG un-suspends an engine by itself once
+  # it starts responding again, so removing them would forfeit that recovery.
+  - name: mojeek
+    disabled: false
+  - name: qwant
+    disabled: false
+
+  # API-backed engines that don't CAPTCHA — surfaced into the "general" category
+  # because Perplexica/A2 only ever searches that one category.
+  #
+  # As of 2026-08-05, stackoverflow is effectively A2's entire working corpus:
+  # everything above is either off or suspended. That is the main reason A2
+  # results are thin. If it stays this way the answer is a different backend
+  # (see the Perplexity Search API note in docs/a2-status.md), not more engines.
+  - name: wikipedia
+    disabled: false
   - name: stackoverflow
-    engine: stackoverflow
-    shortcut: so
+    disabled: false
+    categories: [general, it, q&a]
   - name: github
-    engine: github
-    shortcut: gh
+    disabled: false
+    categories: [general, it, repos]

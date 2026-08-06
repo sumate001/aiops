@@ -1,148 +1,367 @@
 {
-  "title": "GodEyes AIOps",
-  "uid": "godeyes-aiops",
-  "version": 1,
-  "refresh": "15s",
-  "time": { "from": "now-1h", "to": "now" },
-  "panels": [
-    {
-      "id": 1,
-      "title": "Overall Health Score",
-      "type": "gauge",
-      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 6 },
-      "fieldConfig": {
-        "defaults": {
-          "min": 0, "max": 100,
-          "thresholds": {
-            "steps": [
-              { "value": 0, "color": "red" },
-              { "value": 50, "color": "yellow" },
-              { "value": 80, "color": "green" }
-            ]
-          },
-          "unit": "none"
-        }
-      },
-      "targets": [
-        {
-          "expr": "godeyes_overall_health_score",
-          "legendFormat": "{{tenant_id}}"
-        }
+ "title": "GodEyes AIOps",
+ "uid": "godeyes-aiops",
+ "version": 1,
+ "refresh": "15s",
+ "time": {
+  "from": "now-1h",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1,
+   "title": "Overall Health Score",
+   "type": "gauge",
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 6,
+    "h": 6
+   },
+   "fieldConfig": {
+    "defaults": {
+     "min": 0,
+     "max": 100,
+     "thresholds": {
+      "steps": [
+       {
+        "value": 0,
+        "color": "red"
+       },
+       {
+        "value": 50,
+        "color": "yellow"
+       },
+       {
+        "value": 80,
+        "color": "green"
+       }
       ]
-    },
-    {
-      "id": 2,
-      "title": "Host Health Score",
-      "type": "timeseries",
-      "gridPos": { "x": 6, "y": 0, "w": 18, "h": 6 },
-      "fieldConfig": {
-        "defaults": {
-          "min": 0, "max": 100,
-          "unit": "none",
-          "thresholds": {
-            "steps": [
-              { "value": 0, "color": "red" },
-              { "value": 50, "color": "yellow" },
-              { "value": 80, "color": "green" }
-            ]
-          }
-        }
-      },
-      "targets": [
-        {
-          "expr": "godeyes_host_health_score",
-          "legendFormat": "{{host}}"
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "title": "Host Status",
-      "type": "stat",
-      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 4 },
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [
-            { "type": "value", "options": { "1": { "text": "OK", "color": "green" }, "2": { "text": "WARNING", "color": "yellow" }, "3": { "text": "CRITICAL", "color": "red" } } }
-          ]
-        }
-      },
-      "targets": [
-        {
-          "expr": "godeyes_host_status",
-          "legendFormat": "{{host}}"
-        }
-      ]
-    },
-    {
-      "id": 4,
-      "title": "Error Count per Host",
-      "type": "timeseries",
-      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 4 },
-      "targets": [
-        {
-          "expr": "godeyes_host_error_count",
-          "legendFormat": "{{host}} errors"
-        },
-        {
-          "expr": "godeyes_host_warn_count",
-          "legendFormat": "{{host}} warns"
-        }
-      ]
-    },
-    {
-      "id": 5,
-      "title": "MiroFish Frame Relevance",
-      "type": "timeseries",
-      "gridPos": { "x": 0, "y": 10, "w": 12, "h": 6 },
-      "fieldConfig": {
-        "defaults": { "min": 0, "max": 1, "unit": "percentunit" }
-      },
-      "targets": [
-        {
-          "expr": "godeyes_mirofish_frame_relevance",
-          "legendFormat": "{{host}} / {{frame}}"
-        }
-      ]
-    },
-    {
-      "id": 6,
-      "title": "AA Synthesis Confidence",
-      "type": "timeseries",
-      "gridPos": { "x": 12, "y": 10, "w": 12, "h": 6 },
-      "fieldConfig": {
-        "defaults": { "min": 0, "max": 1, "unit": "percentunit" }
-      },
-      "targets": [
-        {
-          "expr": "godeyes_synthesis_confidence",
-          "legendFormat": "{{host}} ({{top_frame}})"
-        }
-      ]
-    },
-    {
-      "id": 7,
-      "title": "Anomaly Count per Host",
-      "type": "timeseries",
-      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 5 },
-      "targets": [
-        {
-          "expr": "godeyes_host_anomaly_count",
-          "legendFormat": "{{host}}"
-        }
-      ]
-    },
-    {
-      "id": 8,
-      "title": "Analyze Requests / min",
-      "type": "timeseries",
-      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 5 },
-      "targets": [
-        {
-          "expr": "rate(godeyes_analyze_requests_total[1m]) * 60",
-          "legendFormat": "requests/min"
-        }
-      ]
+     },
+     "unit": "none"
     }
-  ]
+   },
+   "targets": [
+    {
+     "expr": "godeyes_overall_health_score",
+     "legendFormat": "{{tenant_id}}"
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "title": "Host Health Score",
+   "type": "timeseries",
+   "gridPos": {
+    "x": 6,
+    "y": 0,
+    "w": 18,
+    "h": 6
+   },
+   "fieldConfig": {
+    "defaults": {
+     "min": 0,
+     "max": 100,
+     "unit": "none",
+     "thresholds": {
+      "steps": [
+       {
+        "value": 0,
+        "color": "red"
+       },
+       {
+        "value": 50,
+        "color": "yellow"
+       },
+       {
+        "value": 80,
+        "color": "green"
+       }
+      ]
+     }
+    }
+   },
+   "targets": [
+    {
+     "expr": "godeyes_host_health_score",
+     "legendFormat": "{{host}}"
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "title": "Host Status",
+   "type": "stat",
+   "gridPos": {
+    "x": 0,
+    "y": 6,
+    "w": 12,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "OK",
+         "color": "green"
+        },
+        "2": {
+         "text": "WARNING",
+         "color": "yellow"
+        },
+        "3": {
+         "text": "CRITICAL",
+         "color": "red"
+        }
+       }
+      }
+     ]
+    }
+   },
+   "targets": [
+    {
+     "expr": "godeyes_host_status",
+     "legendFormat": "{{host}}"
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "title": "Error Count per Host",
+   "type": "timeseries",
+   "gridPos": {
+    "x": 12,
+    "y": 6,
+    "w": 12,
+    "h": 4
+   },
+   "targets": [
+    {
+     "expr": "godeyes_host_error_count",
+     "legendFormat": "{{host}} errors"
+    },
+    {
+     "expr": "godeyes_host_warn_count",
+     "legendFormat": "{{host}} warns"
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "title": "MiroFish Frame Relevance",
+   "type": "timeseries",
+   "gridPos": {
+    "x": 0,
+    "y": 10,
+    "w": 12,
+    "h": 6
+   },
+   "fieldConfig": {
+    "defaults": {
+     "min": 0,
+     "max": 1,
+     "unit": "percentunit"
+    }
+   },
+   "targets": [
+    {
+     "expr": "godeyes_mirofish_frame_relevance",
+     "legendFormat": "{{host}} / {{frame}}"
+    }
+   ]
+  },
+  {
+   "id": 6,
+   "title": "AA Synthesis Confidence",
+   "type": "timeseries",
+   "gridPos": {
+    "x": 12,
+    "y": 10,
+    "w": 12,
+    "h": 6
+   },
+   "fieldConfig": {
+    "defaults": {
+     "min": 0,
+     "max": 1,
+     "unit": "percentunit"
+    }
+   },
+   "targets": [
+    {
+     "expr": "godeyes_synthesis_confidence",
+     "legendFormat": "{{host}} ({{top_frame}})"
+    }
+   ]
+  },
+  {
+   "id": 7,
+   "title": "Anomaly Count per Host",
+   "type": "timeseries",
+   "gridPos": {
+    "x": 0,
+    "y": 16,
+    "w": 12,
+    "h": 5
+   },
+   "targets": [
+    {
+     "expr": "godeyes_host_anomaly_count",
+     "legendFormat": "{{host}}"
+    }
+   ]
+  },
+  {
+   "id": 8,
+   "title": "Analyze Requests / min",
+   "type": "timeseries",
+   "gridPos": {
+    "x": 12,
+    "y": 16,
+    "w": 12,
+    "h": 5
+   },
+   "targets": [
+    {
+     "expr": "rate(godeyes_analyze_requests_total[1m]) * 60",
+     "legendFormat": "requests/min"
+    }
+   ]
+  },
+  {
+   "id": 20,
+   "title": "A4 Memory Hit Rate",
+   "description": "สัดส่วนของ hit ที่มีคนยืนยันแล้ว เทียบกับ hit ทั้งหมด · ถ้าเส้น verified ต่ำติดพื้นตลอด แปลว่าไม่มีใครกด feedback — memory จะไม่มีวันดัน confidence เพราะเคสที่ยังไม่ยืนยัน ถูกออกแบบให้ขยับตัวเลขไม่ได้",
+   "type": "timeseries",
+   "gridPos": {
+    "x": 0,
+    "y": 21,
+    "w": 12,
+    "h": 6
+   },
+   "fieldConfig": {
+    "defaults": {
+     "min": 0,
+     "unit": "short"
+    }
+   },
+   "targets": [
+    {
+     "expr": "rate(godeyes_memory_hits_total[5m]) * 60",
+     "legendFormat": "recalled cases /min"
+    },
+    {
+     "expr": "rate(godeyes_memory_verified_hits_total[5m]) * 60",
+     "legendFormat": "verified /min"
+    },
+    {
+     "expr": "sum(rate(godeyes_playbook_hits_total[5m])) * 60",
+     "legendFormat": "playbooks /min"
+    }
+   ]
+  },
+  {
+   "id": 21,
+   "title": "Feedback Verdict",
+   "description": "ตัวชี้วัดหลักว่าระบบ 'เก่งขึ้น' หรือแค่ 'จำได้' — สัดส่วน correct ควรเพิ่มขึ้นตามเวลา ถ้าไม่เพิ่มหลังใช้จริงสักพัก ให้กลับไปดู scoring กับ prompt ของ AA ก่อนเพิ่มฟีเจอร์อื่น",
+   "type": "piechart",
+   "gridPos": {
+    "x": 12,
+    "y": 21,
+    "w": 6,
+    "h": 6
+   },
+   "targets": [
+    {
+     "expr": "sum by (verdict) (godeyes_feedback_total)",
+     "legendFormat": "{{verdict}}"
+    }
+   ]
+  },
+  {
+   "id": 22,
+   "title": "Playbook vs Memory",
+   "description": "สัดส่วนที่ AA พึ่ง playbook เทียบกับเคสจริง — ควร 'ลดลง' ตามเวลา ถ้ายังสูงอยู่หลังผ่านไปหลายเดือน แปลว่าเคสจริงไม่ถูกยืนยัน (Phase 3 ไม่ได้ถูกใช้) ไม่ใช่ว่า playbook ดี",
+   "type": "timeseries",
+   "gridPos": {
+    "x": 18,
+    "y": 21,
+    "w": 6,
+    "h": 6
+   },
+   "fieldConfig": {
+    "defaults": {
+     "min": 0,
+     "unit": "short"
+    }
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(godeyes_playbook_hits_total[15m]))",
+     "legendFormat": "playbook"
+    },
+    {
+     "expr": "rate(godeyes_memory_hits_total[15m])",
+     "legendFormat": "เคสจริง"
+    }
+   ]
+  },
+  {
+   "id": 23,
+   "title": "Confidence Source — มีเคส verified vs ไม่มี",
+   "description": "พิสูจน์ว่า confidence สูงเพราะ 'มีหลักฐาน' ไม่ใช่เพราะ LLM มั่นใจลอยๆ · เส้น memory_influenced คือจำนวนครั้งที่ AA อ้างเคสเก่าจริง ถ้า confidence เฉลี่ยขึ้นแต่เส้นนี้แบน แปลว่าตัวเลขขึ้นเองโดยไม่มีหลักฐานใหม่",
+   "type": "timeseries",
+   "gridPos": {
+    "x": 0,
+    "y": 27,
+    "w": 12,
+    "h": 6
+   },
+   "fieldConfig": {
+    "defaults": {
+     "min": 0
+    }
+   },
+   "targets": [
+    {
+     "expr": "avg(godeyes_synthesis_confidence)",
+     "legendFormat": "confidence เฉลี่ย"
+    },
+    {
+     "expr": "rate(godeyes_synthesis_memory_influenced_total[15m]) * 60",
+     "legendFormat": "AA อ้าง memory /min"
+    }
+   ]
+  },
+  {
+   "id": 24,
+   "title": "A4 Search Latency",
+   "description": "memory ต้องไม่ทำให้ pipeline ช้า — timeout ตั้งไว้ที่ 2s",
+   "type": "timeseries",
+   "gridPos": {
+    "x": 12,
+    "y": 27,
+    "w": 12,
+    "h": 6
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    }
+   },
+   "targets": [
+    {
+     "expr": "histogram_quantile(0.95, rate(godeyes_memory_search_duration_seconds_bucket[5m]))",
+     "legendFormat": "p95"
+    },
+    {
+     "expr": "histogram_quantile(0.50, rate(godeyes_memory_search_duration_seconds_bucket[5m]))",
+     "legendFormat": "p50"
+    }
+   ]
+  }
+ ]
 }
