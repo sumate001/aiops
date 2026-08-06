@@ -45,17 +45,29 @@
 
 ### ที่ยังค้าง
 
-1. **A2 ยังอ่อน** — SearXNG เหลือ engine ที่ตอบจริงไม่กี่ตัว ดู `docs/a2-status.md`
-   ทางเลือกที่ยังเปิดอยู่คือย้ายไป Perplexity Search API
-2. `_clean_error` ของ A2 ยังกลืน error code — ควรเปลี่ยนไปใช้ `normalize.py` ที่มีแล้ว
-3. หน้า pipeline ดูได้แค่ผลล่าสุด ถ้ารับ `?id=` จะ debug ง่ายขึ้นมาก
-4. **A1b: `health_score` จับ seasonality ได้ไม่คมเท่า `error_count`** — dip 92→40
-   เป็นสัดส่วนเบากว่า spike 3→40 มาก โมเดลเลย smooth ทิ้ง ยังเห็น breach ในเคสที่
-   เป็น pattern ปกติ ให้ดู `breach_magnitude` ประกอบ ไม่ใช่ดูแค่ boolean
-5. **A1b ยังไม่เคยรันกับข้อมูลจริงที่มีประวัติ 168 ชม.** — verify ด้วย DB แยก
+1. **A2 ยังอ่อนที่ต้นทาง** — SearXNG เหลือ engine ที่ตอบจริงไม่กี่ตัว (stackoverflow
+   กับ github) ดู `docs/a2-status.md` · ฝั่ง query แก้จนสุดแล้ว (ใช้ error code เป็น
+   คำค้นหลัก) ที่เหลือคือเปลี่ยน backend เช่นไปใช้ Perplexity Search API
+2. **A1b ยังไม่เคยรันกับข้อมูลจริงที่มีประวัติ 168 ชม.** — verify ด้วย DB แยก
    (`/tmp/a1b-test`) ที่ seed ประวัติสังเคราะห์ 8 วัน เพราะ `log_analyzer.db` เป็นของ root
-6. **UI ยังไม่แสดง forecast band** — `HostAnalysis.forecast` มีใน response แล้ว
-   แต่หน้า results/pipeline ยังไม่ render
+   ต้องรอระบบเก็บประวัติจริงครบ 7 วันแล้วกลับมาดูว่า
+   `godeyes_host_forecast_breach` **น้อยกว่า** `godeyes_host_anomaly_count` จริงไหม
+3. **ตัวชี้วัดข้อ 9 ของแผน ต้องใช้จริง 1 เดือน** — โดยเฉพาะสัดส่วน
+   `feedback_total{verdict="correct"}` ที่ต้องเพิ่มขึ้นตามเวลา
+   **ทุกอย่างที่สร้างมาตั้งอยู่บนสมมติฐานว่าจะมีคนกดปุ่ม feedback จริง**
+   ถ้าไม่มีใครกด memory จะเป็น unverified ทั้งหมดตลอดไป และ confidence จะไม่ขยับ
+   เลยสักครั้ง — ซึ่งเป็นพฤติกรรมที่ออกแบบไว้ ไม่ใช่บั๊ก
+4. **Phase 5 (log templating / drain3)** — แผนบอกเองว่า "ทำเมื่อ log เยอะจนช้าหรือ
+   index บวม" ตอนนี้ยังไม่เจอปัญหานั้น
+
+### ✅ ปิดเพิ่มรอบเดียวกัน (`7f933a9`)
+
+- UI แสดง forecast band แล้วทั้ง results และ pipeline
+- `_clean_error` ใช้ `normalize.py` แล้ว + `build_query` เลือก error code ก่อน
+  (`ORA-01555` ได้ 11 ผล เดิมเหลือแค่ `ora`)
+- หน้า pipeline รับ `?id=` เปิดผลย้อนหลังได้
+- ตัด `health_score` ออกจาก `forecast.metrics` — ซ้ำซ้อนกับ `anomaly_score`
+  และเป็นทิศทางที่ Chronos จับได้แย่กว่า
 
 ### เอกสารที่เกี่ยวข้อง
 
