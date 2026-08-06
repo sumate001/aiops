@@ -362,6 +362,126 @@
      "legendFormat": "p50"
     }
    ]
+  },
+  {
+   "id": 30,
+   "title": "A1b Forecast vs Actual",
+   "description": "แถบ p10–p90 คือช่วงที่ 'ปกติ' สำหรับ host นี้ ณ เวลานี้ เส้น actual ที่อยู่ในแถบ = พฤติกรรมปกติ ต่อให้ตัวเลขดูสูง",
+   "type": "timeseries",
+   "gridPos": {
+    "x": 0,
+    "y": 33,
+    "w": 12,
+    "h": 7
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "fillOpacity": 10,
+      "lineWidth": 1
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "actual"
+      },
+      "properties": [
+       {
+        "id": "custom.lineWidth",
+        "value": 2
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 0
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "godeyes_host_forecast_p10{metric=\"error_count\"}",
+     "legendFormat": "p10 {{host}}"
+    },
+    {
+     "expr": "godeyes_host_forecast_p50{metric=\"error_count\"}",
+     "legendFormat": "p50 {{host}}"
+    },
+    {
+     "expr": "godeyes_host_forecast_p90{metric=\"error_count\"}",
+     "legendFormat": "p90 {{host}}"
+    },
+    {
+     "expr": "godeyes_host_error_count",
+     "legendFormat": "actual"
+    }
+   ]
+  },
+  {
+   "id": 31,
+   "title": "Forecast Breach ตอนนี้",
+   "description": "host/metric ที่หลุดกรอบอยู่ — คือสิ่งที่ผิดปกติจริงตามเวลานั้น",
+   "type": "stat",
+   "gridPos": {
+    "x": 12,
+    "y": 33,
+    "w": 6,
+    "h": 7
+   },
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "ปกติ",
+         "color": "green"
+        },
+        "1": {
+         "text": "หลุดกรอบ",
+         "color": "red"
+        }
+       }
+      }
+     ]
+    }
+   },
+   "targets": [
+    {
+     "expr": "godeyes_host_forecast_breach > 0",
+     "legendFormat": "{{host}} / {{metric}}"
+    }
+   ]
+  },
+  {
+   "id": 32,
+   "title": "A1b กรอง noise ได้จริงไหม",
+   "description": "A1b ควร fire 'น้อยกว่า' A1 — เพราะ metric ที่สูงทุกคืนเวลาเดิม คือ host ทำงานปกติ ไม่ใช่ incident · ถ้าเส้น A1b สูงกว่าหรือเท่า A1 ตลอด แปลว่ายังไม่ได้กรองอะไรเลย ให้ไปดูว่าประวัติพอ 168h หรือยัง",
+   "type": "timeseries",
+   "gridPos": {
+    "x": 18,
+    "y": 33,
+    "w": 6,
+    "h": 7
+   },
+   "fieldConfig": {
+    "defaults": {
+     "min": 0
+    }
+   },
+   "targets": [
+    {
+     "expr": "sum(godeyes_host_anomaly_count)",
+     "legendFormat": "A1 anomalies"
+    },
+    {
+     "expr": "sum(godeyes_host_forecast_breach)",
+     "legendFormat": "A1b breaches"
+    }
+   ]
   }
  ]
 }
