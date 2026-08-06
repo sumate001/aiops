@@ -131,6 +131,12 @@ forecast:
   min_history_hours: 168
   aggregate_resolution: "hourly"   # hourly | 6h
   prediction_length: 12            # ห้ามเกิน 64 — อยากมองไกลกว่านี้ให้ลด resolution
-  metrics: ["error_count", "warn_count", "anomaly_score", "health_score"]
+  # ไม่มี health_score โดยตั้งใจ — anomaly_score = 1 - health/100 คือข้อมูลชุดเดียวกัน
+  # แต่เป็นการ "ขึ้น" แทน "ลง" ซึ่ง Chronos จับได้ดีกว่ามาก วัดบน series เดียวกัน:
+  #   error_count   3 → 40   (ขึ้น 13x) → อยู่ในกรอบ mag 0.33
+  #   anomaly_score 0.08 → 0.6 (ขึ้น 7x) → อยู่ในกรอบ mag 0.33
+  #   health_score  92 → 40  (ลง)       → หลุดกรอบ  mag 1.96
+  # ใส่ทั้งคู่จะได้ false positive ทุกครั้งที่ health dip ตามฤดูกาล
+  metrics: ["error_count", "warn_count", "anomaly_score"]
   timeout_seconds: 5.0
   warm_up_on_startup: true

@@ -85,7 +85,15 @@ class ForecastConfig(BaseModel):
     min_history_hours: int = 168
     aggregate_resolution: str = "hourly"   # hourly | 6h
     prediction_length: int = 12            # keep <= 64; look further by lowering resolution
-    metrics: list[str] = ["error_count", "warn_count", "anomaly_score", "health_score"]
+    # health_score is deliberately absent. `anomaly_score` is defined as
+    # 1 - health/100, so it carries exactly the same information — but as a rise
+    # rather than a dip, and Chronos handles that far better. Measured on the
+    # same 8-day seasonal series, forecasting a spike hour that behaves normally:
+    #   error_count   3 → 40  (up 13x)   → in band,  magnitude 0.33
+    #   anomaly_score 0.08 → 0.6 (up 7x) → in band,  magnitude 0.33
+    #   health_score  92 → 40  (down)    → BREACH,   magnitude 1.96
+    # Forecasting both would just add a false positive on every seasonal dip.
+    metrics: list[str] = ["error_count", "warn_count", "anomaly_score"]
     timeout_seconds: float = 5.0
     warm_up_on_startup: bool = True
 

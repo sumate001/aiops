@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useRouter } from "next/router";
 import Link from "next/link";
 
 // ─── types (subset of AnalyzeResponse) ───────────────────────────────────────
@@ -26,12 +27,17 @@ type Prediction = {
 };
 type Enrichment = { query: string; answer: string; sources: { title: string; url: string }[] };
 type TopError = { msg: string; count: number };
+type ForecastBand = {
+  metric: string; p10: number; p50: number; p90: number;
+  actual: number | null; breach: boolean; breach_magnitude: number;
+};
 type HostAnalysis = {
   host: string; entry_count: number; error_count: number; warn_count: number;
   health_score: number; status: string;
   anomalies: AnomalyScore[]; top_errors: TopError[];
   mirofish: MiroFishFrame[]; synthesis?: Synthesis;
   trend?: Trend; prediction?: Prediction; enrichment?: Enrichment;
+  forecast?: ForecastBand[];
 };
 type PropagationIncident = {
   node_id: string; label?: string; start_health: number; end_health: number;
@@ -120,18 +126,28 @@ export default function Pipeline() {
   const [hostIdx, setHostIdx] = useState(0);
   const [loading, setLoading] = useState(true);
 
+  // ?id= opens any past run. Without it this page can only ever show the newest
+  // result, which makes it useless for looking at the analysis someone is
+  // actually asking about.
+  const router = useRouter();
+  const wantedId = router.query.id ? Number(router.query.id) : null;
+
   useEffect(() => {
-    fetch("/api/results?limit=1")
-      .then((r) => r.json())
-      .then((d) => {
+    if (!router.isReady) return;
+    setLoading(true);
+    const load = wantedId
+      ? Promise.resolve({ results: [{ id: wantedId }] })
+      : fetch("/api/results?limit=1").then((r) => r.json());
+    load
+      .then((d: any) => {
         const row = d.results?.[0];
         if (!row) { setLoading(false); return; }
         setResultId(row.id);
-        return fetch(`/api/results/${row.id}`).then((r) => r.json());
+        return fetch(`/api/results/${row.id}`).then((r) => (r.ok ? r.json() : null));
       })
       .then((d) => { if (d) setResult(d); })
       .finally(() => setLoading(false));
-  }, []);
+  }, [router.isReady, wantedId]);
 
   const host: HostAnalysis | undefined = result?.hosts?.[hostIdx];
 
@@ -318,6 +334,40 @@ export default function Pipeline() {
                 })()}
               </Section>
 
+              {/* ── A1b Chronos forecast ─────────────────────────────────── */}
+              <div className="flex gap-1 items-center text-gray-700 pl-4"><span>↓</span></div>
+              <Section title="A1b — Chronos Forecast (เทียบกับอดีตของ host เอง)" color="border-cyan-800">
+                <div className="flex gap-3 mb-3 flex-wrap">
+                  <Chip label="window_stats รายชั่วโมง (≥168h)" type="in" />
+                </div>
+                {!host.forecast?.length ? (
+                  <p className="text-xs text-gray-600 bg-gray-800 rounded-lg p-3">
+                    ยังไม่มีประวัติพอสำหรับพยากรณ์ — ต้องมี window_stats อย่างน้อย 168 ชั่วโมง
+                    (7 วัน) ต่อ host · จำนวนรอบวันที่น้อยกว่านี้ทำให้โมเดลเห็นว่ามี pattern
+                    แต่กะขนาดไม่ถูก แล้วจะแจ้งเตือนพฤติกรรมปกติเป็น anomaly
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {host.forecast.map((b) => (
+                      <div key={b.metric} className="bg-gray-800 rounded-lg p-3">
+                        <div className="flex items-center gap-3 text-xs flex-wrap">
+                          <span className="text-gray-300 w-32">{b.metric}</span>
+                          <span className="text-gray-500">
+                            คาด {b.p10.toFixed(1)}–{b.p90.toFixed(1)} (กลาง {b.p50.toFixed(1)})
+                          </span>
+                          <span className="text-gray-300">จริง {b.actual?.toFixed(1) ?? "-"}</span>
+                          <span className={b.breach ? "text-amber-400" : "text-green-400"}>
+                            {b.breach
+                              ? `หลุดกรอบ · ${b.breach_magnitude.toFixed(1)}× ความกว้างกรอบ`
+                              : "อยู่ในกรอบ = ปกติสำหรับเวลานี้"}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Section>
+
               {/* ── A2 Perplexica ────────────────────────────────────────── */}
               <div className="flex gap-1 items-center text-gray-700 pl-4"><span>↓</span></div>
               <Section title="A2 — Perplexica External Knowledge" color="border-violet-800">
@@ -430,6 +480,7 @@ export default function Pipeline() {
                 <div className="flex gap-3 mb-3 flex-wrap">
                   <Chip label="health_score (A1)" type="in" />
                   <Chip label="anomalies[] (A1)" type="in" />
+                  <Chip label="forecast bands (A1b)" type="in" />
                   {host.enrichment && !grounded(host)
                     ? <Chip label="enrichment (A2) — withheld, 0 sources" type="cut" />
                     : <Chip label="enrichment (A2)" type="in" />}

@@ -117,3 +117,27 @@ def test_symptom_text_with_nothing_but_the_basics():
     text = build_symptom_text(host="h1", service=None, status="ok", health_score=100.0)
     assert "[unknown@h1]" in text
     assert "sample_errors" not in text
+
+
+# ── error-code extraction (feeds A2's search query) ─────────────────────────
+@pytest.mark.parametrize("msg,expected", [
+    ("ORA-01555: snapshot too old", "ORA-01555"),
+    ("write failed: errno 28", "errno 28"),
+    ("upstream returned HTTP 503", "HTTP 503"),
+    ("E11000 duplicate key error", "E11000"),
+    ("[MY-012345] [InnoDB] operating system error", "MY-012345"),
+])
+def test_extract_error_codes_finds_the_identifying_token(msg, expected):
+    from app.services.normalize import extract_error_codes
+    assert expected in extract_error_codes(msg)
+
+
+def test_extract_error_codes_returns_nothing_for_plain_prose():
+    from app.services.normalize import extract_error_codes
+    assert extract_error_codes("the database seems unhappy today") == []
+
+
+def test_extract_error_codes_dedupes_and_keeps_order():
+    from app.services.normalize import extract_error_codes
+    codes = extract_error_codes("ORA-01555 then HTTP 503 then ORA-01555 again")
+    assert codes == ["ORA-01555", "HTTP 503"]

@@ -91,6 +91,26 @@ def normalize_message(msg: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def extract_error_codes(msg: str) -> list[str]:
+    """Pull out the diagnostic codes in a line, in the order they appear.
+
+    These are the highest-value tokens a line contains: `ORA-01555` names one
+    specific failure, while the surrounding prose ("snapshot too old on
+    tablespace") describes a whole family of them. Useful both as a search term
+    and as a sparse-index signal.
+    """
+    if not msg:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _PROTECTED.finditer(msg):
+        code = " ".join(m.group(0).split())
+        if code.lower() not in seen:
+            seen.add(code.lower())
+            out.append(code)
+    return out
+
+
 def normalize_messages(msgs: list[str], limit: int | None = None) -> list[str]:
     """Normalise many lines, dropping duplicates that collapse onto each other.
 

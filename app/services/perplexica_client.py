@@ -138,20 +138,7 @@ async def _ensure_chat_provider(
         return None
 
 
-# Drop quoted strings, hex/ids, timestamps and SQL/path noise that derail web
-# search (a raw error line with a SELECT or a 0x… id returns zero results).
-_QUERY_NOISE = re.compile(
-    r"""["'`]                         # quotes
-        | 0x[0-9a-f]+                  # hex ids
-        | \b\d{4}-\d{2}-\d{2}t[\d:.]+z?\b   # iso timestamps
-        | \b[0-9a-f]{8,}\b            # long hex/uuid chunks
-        | \b\d{3,}\b                  # long bare numbers (ports/pids/counts)
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
-
-
-# Grammar filler that survives _QUERY_NOISE but carries no search signal. Kept
+# Grammar filler that survives normalisation but carries no search signal. Kept
 # deliberately small: domain words ("failed", "timeout", "refused") must stay.
 _STOPWORDS = frozenset("""
     a an the and or but if of in on at to for from by with is was are were be
@@ -159,12 +146,27 @@ _STOPWORDS = frozenset("""
     have had do does did not no
 """.split())
 
+# Placeholders normalize.py leaves behind (<IP>, <NUM>, <TS>, …). They mark
+# where the varying parts were; as search terms they are worse than nothing.
+_PLACEHOLDER = re.compile(r"<[A-Z]+>")
+
 
 def _clean_error(msg: str) -> str:
-    """Reduce a raw error line to a short, searchable keyword phrase."""
-    text = _QUERY_NOISE.sub(" ", msg.lower())
-    text = re.sub(r"[^a-z0-9 ]+", " ", text)
-    words = [w for w in text.split() if len(w) > 1 and w not in _STOPWORDS]
+    """Reduce a raw error line to a short, searchable keyword phrase.
+
+    Delegates the hard part to normalize.py rather than stripping digits here.
+    The old local regex dropped every number of three digits or more, which took
+    `ORA-01555`, `HTTP 503` and `errno 111` with it — precisely the tokens most
+    likely to find the right page. normalize.py protects those and blanks only
+    the genuinely varying parts.
+    """
+    from app.services.normalize import normalize_message  # local: avoid cycle
+
+    text = _PLACEHOLDER.sub(" ", normalize_message(msg)).lower()
+    # Keep alphanumerics plus the punctuation that lives inside error codes.
+    text = re.sub(r"[^a-z0-9 _.\-]+", " ", text)
+    words = [w.strip("-._") for w in text.split()]
+    words = [w for w in words if len(w) > 1 and w not in _STOPWORDS]
     return " ".join(words[:6])
 
 
@@ -199,9 +201,20 @@ def build_query(
     def trim(text: str) -> str:
         return " ".join(text.lower().split()[:_MAX_QUERY_WORDS])
 
+    from app.services.normalize import extract_error_codes  # local: avoid cycle
+
+    # A specific error code beats everything else: "ORA-01555" identifies one
+    # failure, while the prose around it ("snapshot too old on tablespace")
+    # describes a whole family. It's also short, which matters — these engines
+    # intersect terms, so fewer concepts means more results.
+    for msg in (top_error_msgs or [])[:2]:
+        codes = extract_error_codes(msg)
+        if codes:
+            return trim(codes[0])
+
     # Frame keywords are curated single concepts ("deadlock", "connection
-    # refused") — the best search terms available. The de-noised error phrase is
-    # the fallback; anomalous metric names cover metrics-only windows.
+    # refused") — the next best thing. The de-noised error phrase is the
+    # fallback; anomalous metric names cover metrics-only windows.
     if top_keywords:
         return trim(top_keywords[0])
     if top_error_msgs:

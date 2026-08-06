@@ -143,3 +143,16 @@ def test_min_history_covers_enough_daily_cycles():
     exactly the false positive A1b exists to remove."""
     from app.config import config
     assert config.forecast.min_history_hours >= 120
+
+
+def test_health_score_is_not_forecast_directly():
+    """anomaly_score is 1 - health/100 — the same information, but rising
+    instead of falling, which Chronos handles far better. Measured on one 8-day
+    seasonal series, forecasting a spike hour that behaved entirely normally:
+        error_count   3 → 40    → in band, magnitude 0.33
+        anomaly_score 0.08 → 0.6 → in band, magnitude 0.33
+        health_score  92 → 40   → BREACH,  magnitude 1.96
+    Forecasting both would add a false positive on every seasonal dip."""
+    from app.config import config
+    assert "anomaly_score" in config.forecast.metrics
+    assert "health_score" not in config.forecast.metrics

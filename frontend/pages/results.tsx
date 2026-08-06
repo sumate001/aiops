@@ -257,6 +257,7 @@ function HostsTab({ hosts, resultId }: { hosts: any[]; resultId: number | null }
                   </ul>
                 </div>
               )}
+              <ForecastPanel bands={h.forecast} />
               <MemoryPanel hits={h.memory_hits} />
               {/* Per host, not once per page: an analysis covers several hosts
                   and each has its own memory point, so one verdict can't stand
@@ -280,6 +281,79 @@ function Stat({ label, value }: { label: string; value: string }) {
 }
 
 // ─── A4 memory ──────────────────────────────────────────────────────────────
+
+type ForecastBand = {
+  metric: string;
+  p10: number;
+  p50: number;
+  p90: number;
+  actual: number | null;
+  breach: boolean;
+  breach_magnitude: number;
+};
+
+function ForecastPanel({ bands }: { bands?: ForecastBand[] }) {
+  if (!bands?.length) return null;
+
+  return (
+    <div className="mt-4">
+      <p className="text-xs text-gray-400 mb-1">
+        📈 เทียบกับพฤติกรรมของ host นี้เองในอดีต ณ เวลาเดียวกัน (A1b)
+      </p>
+      <div className="space-y-1.5">
+        {bands.map((b) => {
+          // The band is the whole point: without seeing where the value sits
+          // inside it, "breach: true" is just another opaque alert. Clamp the
+          // marker so a value far outside still renders at the edge.
+          const lo = Math.min(b.p10, b.actual ?? b.p10);
+          const hi = Math.max(b.p90, b.actual ?? b.p90);
+          const span = hi - lo;
+          // A metric that never varies gives p10 == p90 == actual. Mapping that
+          // to 0% pins the marker at the far left, which reads as "far below the
+          // band" when it is in fact exactly on target — so centre it instead.
+          const pct = (v: number) =>
+            span < 1e-9 ? "50%"
+                        : `${Math.min(100, Math.max(0, ((v - lo) / span) * 100))}%`;
+          return (
+            <div key={b.metric} className="bg-gray-900 rounded p-2 border border-gray-800">
+              <div className="flex items-center gap-2 text-[11px]">
+                <span className="text-gray-300 w-28 shrink-0">{b.metric}</span>
+                <span className={b.breach ? "text-amber-400" : "text-green-400"}>
+                  {b.breach ? "หลุดกรอบ" : "อยู่ในกรอบ"}
+                </span>
+                {b.breach && (
+                  <span className="text-gray-500">
+                    ห่าง {b.breach_magnitude.toFixed(1)}× ความกว้างกรอบ
+                  </span>
+                )}
+                <span className="text-gray-500 ml-auto">
+                  คาด {b.p10.toFixed(1)}–{b.p90.toFixed(1)} · จริง {b.actual?.toFixed(1) ?? "-"}
+                </span>
+              </div>
+              <div className="relative h-2 mt-1.5 bg-gray-800 rounded">
+                <div
+                  className="absolute h-2 bg-green-900/60 rounded"
+                  style={{ left: pct(b.p10), width: `calc(${pct(b.p90)} - ${pct(b.p10)})` }}
+                />
+                <div className="absolute h-2 w-px bg-gray-500" style={{ left: pct(b.p50) }} />
+                {b.actual != null && (
+                  <div
+                    className={`absolute -top-0.5 h-3 w-0.5 ${b.breach ? "bg-amber-400" : "bg-green-400"}`}
+                    style={{ left: pct(b.actual) }}
+                  />
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-[10px] text-gray-600 mt-1.5">
+        ค่าที่อยู่ในกรอบคือปกติสำหรับ host นี้ตามเวลานี้ ต่อให้ตัวเลขดูสูง —
+        เช่น batch job ที่ทำ error พุ่งทุกคืนเวลาเดิม
+      </p>
+    </div>
+  );
+}
 
 type MemoryHit = {
   point_id: string;
