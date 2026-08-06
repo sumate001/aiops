@@ -24,6 +24,51 @@ class LogMlConfig(BaseModel):
     enabled: bool = True
 
 
+class PlaybookPackConfig(BaseModel):
+    """Shipped per-engine knowledge, seeded into the memory collection."""
+    enabled: bool = True
+    version: str = "2026.08.1"
+    engines: list[str] = ["mysql", "postgresql", "mongodb"]
+    # Below verified analyses (1.6): a confirmed case on our own machine always
+    # outranks general engine knowledge. Playbooks fill the gap, never replace.
+    kind_weight: float = 1.2
+    reserve_analysis_slots: int = 1
+
+
+class MemoryConfig(BaseModel):
+    """A4 long-term memory (Qdrant)."""
+    enabled: bool = True
+    qdrant_url: str = "http://localhost:6333"
+    collection: str = "godeyes_memory"
+    embedding_model: str = "intfloat/multilingual-e5-small"
+    embedding_device: str = "cpu"
+    sparse_model: str = "Qdrant/bm25"
+    top_k: int = 3          # small judge model — keep the prompt short
+    # Threshold on raw similarity, NOT final_score.
+    #
+    # Calibrated against multilingual-e5-small on 2026-08-06, because e5 has a
+    # high similarity floor — nothing ever scores near zero. Measured
+    # query-vs-passage cosine on this model:
+    #   identical text .............. 0.96
+    #   same issue, other wording ... 0.85
+    #   same engine, other issue .... 0.83
+    #   unrelated infrastructure .... 0.79
+    #   gibberish ................... 0.78
+    #   unrelated Thai prose ........ 0.72
+    # The plan's 0.45 would admit literally every point in the collection.
+    min_score: float = 0.80
+    timeout_seconds: float = 2.0
+    prefer_verified: bool = True
+    time_decay_days: int = 180
+    # Dedup compares passage-vs-passage (both sides carry the "passage: "
+    # prefix), where identical text scores exactly 1.0 and a near-duplicate
+    # ~0.985 — so 0.95 works here even though it would be unreachable on the
+    # query-vs-passage scale used for search.
+    dedup_threshold: float = 0.95
+    warm_up_on_startup: bool = True
+    playbook_pack: PlaybookPackConfig = PlaybookPackConfig()
+
+
 class ServiceDetectionConfig(BaseModel):
     """Infer the DB engine from log text so A4 can filter by service."""
     enabled: bool = True
@@ -162,6 +207,7 @@ class AppConfig(BaseModel):
     llm: LLMConfig = LLMConfig()
     analysis: AnalysisConfig = AnalysisConfig()
     service_detection: ServiceDetectionConfig = ServiceDetectionConfig()
+    memory: MemoryConfig = MemoryConfig()
 
 
 def _parse_timeout(value: str) -> float:

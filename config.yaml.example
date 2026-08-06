@@ -83,3 +83,33 @@ service_detection:
   sample_lines: 50            # ดูแค่ N บรรทัดแรกพอ ไม่ต้องสแกนทั้งหมด
   # ต่ำกว่านี้คืน None — filter ผิด engine แย่กว่าไม่ filter เลย
   min_confidence: 0.6
+
+# A4 long-term memory (Qdrant) — เก็บผลวิเคราะห์เก่าไว้ค้นกลับมาใช้
+memory:
+  enabled: true
+  qdrant_url: "http://localhost:6333"
+  collection: "godeyes_memory"
+  embedding_model: "intfloat/multilingual-e5-small"   # 384 มิติ ไทย+อังกฤษ
+  embedding_device: "cpu"                              # หรือ cuda
+  sparse_model: "Qdrant/bm25"                          # จับ error code ที่ dense จับไม่ได้
+  top_k: 3                                             # โมเดล judge เล็ก คุม prompt ไม่ให้ยาว
+  # เกณฑ์ของ similarity ดิบ (ไม่ใช่ final_score)
+  # ปรับตามที่วัดจริงกับ multilingual-e5-small เมื่อ 2026-08-06 — e5 มีพื้นสูง
+  # ไม่มีอะไรได้คะแนนใกล้ศูนย์: ข้อความเหมือนกันเป๊ะ 0.96 · เรื่องเดียวกันคนละคำ 0.85
+  # · engine เดียวกันคนละปัญหา 0.83 · คนละเรื่องเลย 0.79 · ข้อความมั่ว 0.78
+  # · ภาษาไทยเรื่องอากาศ 0.72
+  # ค่า 0.45 ตามแผนเดิมจะไม่กรองอะไรออกเลยสักจุด
+  min_score: 0.80
+  timeout_seconds: 2.0
+  prefer_verified: true
+  time_decay_days: 180
+  # dedup เทียบ passage-vs-passage ซึ่งข้อความเหมือนกันได้ 1.0 พอดี
+  # (คนละสเกลกับ min_score ที่เป็น query-vs-passage)
+  dedup_threshold: 0.95
+  warm_up_on_startup: true
+  playbook_pack:
+    enabled: true
+    version: "2026.08.1"
+    engines: ["mysql", "postgresql", "mongodb"]
+    kind_weight: 1.2          # ต่ำกว่า verified analysis (1.6) โดยตั้งใจ
+    reserve_analysis_slots: 1 # กัน slot ให้เคสจริงอย่างน้อย 1
