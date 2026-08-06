@@ -34,19 +34,28 @@
 - **เรียกว่า playbook ไม่ใช่ knowledge_doc** — ชื่อ knowledge ถูกใช้ไปแล้ว 2 ที่
 - **Qdrant อยู่ใน `deploy.sh` ไม่ใช่ docker-compose** — compose อยู่บน orphan branch
 
+### ✅ ปิดไปแล้วในรอบเดียวกัน
+
+- **merge เข้า main** แล้ว (`aa55fc2`)
+- **Phase 4 A1b Chronos** เสร็จ (`6ee3dac`) — แต่ `min_history_hours` ต้องเป็น **168** ไม่ใช่ 72
+  ตามแผน เพราะ 3 วันวัดแล้วยังสร้าง false positive
+- **Grafana** เพิ่ม 8 panel บน branch `godeyes` (`6ab2028`, `48a60e8`)
+- **SearXNG drift** แก้ที่ต้นเหตุแล้ว — config เข้า repo, `deploy.sh` mount read-only
+  ทั้งสอง branch sync กันแล้ว
+
 ### ที่ยังค้าง
 
-1. **merge branch เข้า main** — ยังไม่ทำ
-2. **Phase 4 Chronos forecast** — ยังไม่เริ่ม (`min_history_hours: 72`, hourly aggregate)
-3. **Grafana panel ใหม่** (Forecast band, Memory Hit Rate, Feedback Verdict, Confidence Source)
-   ติดปัญหาว่า dashboard อยู่บน orphan branch `godeyes`
-4. **⚠️ `searxng/settings.yml` บน branch `godeyes` drift จากที่รันจริง** — ยังเป็นของเดิม
-   ที่เปิด google/bing/ddg ถ้า redeploy จาก branch นั้นการจูน A2 ทั้งหมดจะถูกล้างกลับ
-   **ต้อง reconcile ก่อนใช้ branch นั้น deploy**
-5. **A2 ยังอ่อน** — SearXNG เหลือ engine ที่ตอบจริงไม่กี่ตัว ดู `docs/a2-status.md`
+1. **A2 ยังอ่อน** — SearXNG เหลือ engine ที่ตอบจริงไม่กี่ตัว ดู `docs/a2-status.md`
    ทางเลือกที่ยังเปิดอยู่คือย้ายไป Perplexity Search API
-6. `_clean_error` ของ A2 ยังกลืน error code — ควรเปลี่ยนไปใช้ `normalize.py` ที่มีแล้ว
-7. หน้า pipeline ดูได้แค่ผลล่าสุด ถ้ารับ `?id=` จะ debug ง่ายขึ้นมาก
+2. `_clean_error` ของ A2 ยังกลืน error code — ควรเปลี่ยนไปใช้ `normalize.py` ที่มีแล้ว
+3. หน้า pipeline ดูได้แค่ผลล่าสุด ถ้ารับ `?id=` จะ debug ง่ายขึ้นมาก
+4. **A1b: `health_score` จับ seasonality ได้ไม่คมเท่า `error_count`** — dip 92→40
+   เป็นสัดส่วนเบากว่า spike 3→40 มาก โมเดลเลย smooth ทิ้ง ยังเห็น breach ในเคสที่
+   เป็น pattern ปกติ ให้ดู `breach_magnitude` ประกอบ ไม่ใช่ดูแค่ boolean
+5. **A1b ยังไม่เคยรันกับข้อมูลจริงที่มีประวัติ 168 ชม.** — verify ด้วย DB แยก
+   (`/tmp/a1b-test`) ที่ seed ประวัติสังเคราะห์ 8 วัน เพราะ `log_analyzer.db` เป็นของ root
+6. **UI ยังไม่แสดง forecast band** — `HostAnalysis.forecast` มีใน response แล้ว
+   แต่หน้า results/pipeline ยังไม่ render
 
 ### เอกสารที่เกี่ยวข้อง
 

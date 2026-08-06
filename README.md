@@ -48,6 +48,7 @@ Mixture of Agents (MoA) architecture สำหรับวิเคราะห�
 | **A1** | Rule + Isolation Forest | Rule-based anomaly detection + multivariate statistical ML (9 features) + metric threshold check (มี unit-mismatch guard) |
 | **A2** | Perplexica | External knowledge enrichment ผ่าน SearXNG + AI synthesis (chat ผ่าน provider ที่เลือก, embedding บน Transformers ในเครื่อง) — มี result cache 6h + cooldown 60s กัน upstream แบน |
 | **A3** | MiroFish | 5-frame multi-perspective analysis: Security, Database, Network, Hardware, Software — แต่ละ frame ให้ expert insight 3-5 ประโยค |
+| **A1b** | Chronos Forecast | พยากรณ์จากประวัติของ host เอง (hourly, ต้องมี ≥168h) แล้วเทียบว่าค่าจริงหลุดกรอบ p10–p90 ไหม · A1 ถาม "แปลกเทียบ feature อื่นไหม" (ไม่รู้จักเวลา) A1b ถาม "แปลกเทียบตัวเองในอดีต ณ เวลาเดียวกันไหม" — batch job ที่ทำ error พุ่งทุกตี 2 จึงไม่ถูกตีเป็น incident |
 | **A4** | Memory (Qdrant) | ค้นเคสที่เคยวิเคราะห์บน host นี้ + playbook ที่ ship มากับระบบ · hybrid dense (multilingual-e5-small) + sparse BM25 เพราะ error code อย่าง `ORA-01555` dense จับไม่ได้ · timeout 2s แล้วไปต่อ — memory เป็นส่วนเสริม ไม่ใช่ dependency |
 | **AA** | Synthesizer | 2 pass: rule pass (เร็ว, ใช้สร้าง A2 query) → LLM-as-Judge pass ที่เห็นหลักฐานจริงครบ (error/warn messages, MiroFish insights, ค่า metric, ผล A2) → root_cause_chain + confidence + fix_steps + reasoning |
 
@@ -489,10 +490,16 @@ Health check
 | `godeyes_memory_search_duration_seconds` | Histogram | latency ของการค้น A4 |
 | `godeyes_synthesis_memory_influenced_total` | Counter | ครั้งที่ AA อ้างเคสเก่าจริง |
 | `godeyes_feedback_total{verdict}` | Counter | verdict จากคน (correct/partial/wrong) |
+| `godeyes_host_forecast_p10/p50/p90{host,metric}` | Gauge | กรอบที่ A1b พยากรณ์ |
+| `godeyes_host_forecast_breach{host,metric}` | Gauge | 1 = ค่าจริงหลุดกรอบ |
 
 > **ตัวชี้วัดที่ควรจับตา:** สัดส่วน `godeyes_feedback_total{verdict="correct"}`
 > ต่อทั้งหมด ควรเพิ่มขึ้นตามเวลา ถ้าไม่เพิ่ม แปลว่าระบบแค่ "จำได้" แต่ไม่ได้
 > "เก่งขึ้น" — ต้องกลับไปดู scoring กับ prompt ของ AA ก่อนเพิ่มฟีเจอร์อื่น
+>
+> `godeyes_host_forecast_breach` รวมกันควร **น้อยกว่า** `godeyes_host_anomaly_count` —
+> นั่นคือหลักฐานว่า A1b กรอง noise ตามฤดูกาลออกได้จริง ถ้าเท่ากันตลอดแปลว่า
+> ประวัติยังไม่ถึง 168 ชั่วโมง
 >
 > เทียบ `godeyes_memory_verified_hits_total` กับ `godeyes_memory_hits_total` ด้วย
 > ถ้า verified ต่ำมาตลอด แปลว่าไม่มีใครกดยืนยัน — memory จะไม่มีวันดัน confidence
