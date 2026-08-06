@@ -78,6 +78,21 @@ class SynthesisResult:
     top_frame_lens: str | None = None
     anomaly_methods: list[str] = field(default_factory=list)
     reasoning: str | None = None
+    memory_refs: list[str] = field(default_factory=list)
+    memory_influenced: bool = False
+    playbook_refs: list[str] = field(default_factory=list)
+    playbook_influenced: bool = False
+
+
+# Confidence boost tiers for a verified recalled case.
+#
+# The plan specified 0.80 / 0.65 on the assumption that similarity spans 0-1.
+# It doesn't: multilingual-e5-small never scores below ~0.72, so 0.65 would fire
+# on literally everything and 0.80 on plainly unrelated text. Measured on this
+# model — identical 0.96, same issue different wording 0.85, same engine other
+# issue 0.83, unrelated 0.79, gibberish 0.78 — these are the equivalent cuts.
+MEM_SIM_STRONG = 0.90    # effectively the same symptom
+MEM_SIM_MODERATE = 0.84  # same issue, described differently
 
 
 def _rule_synthesis(
@@ -87,11 +102,18 @@ def _rule_synthesis(
     mirofish_frames: list[dict],
     trend: dict | None = None,
     prediction: dict | None = None,
+    memory_hits: list | None = None,
 ) -> SynthesisResult:
     """
     Pure-rule synthesis — no LLM, instant.
     Weighs MiroFish relevance + anomaly severity to produce root_cause_chain.
+
+    Memory is handled here too, not only on the LLM path: when the judge model
+    fails and we fall back to rules, recalled cases have to keep showing up.
+    Otherwise memory disappears exactly when the system is least reliable, and
+    nothing in the output says so.
     """
+    memory_hits = memory_hits or []
     # Filter relevant frames
     relevant = [f for f in mirofish_frames if f["relevance"] > 0]
     top = relevant[0] if relevant else None
@@ -164,6 +186,8 @@ def _rule_synthesis(
     # Fix steps from top frame playbook
     fix_steps = _FRAME_PLAYBOOK.get(top["frame"], _DEFAULT_PLAYBOOK) if top else _DEFAULT_PLAYBOOK
 
+    chain, confidence, mem_refs, pb_refs = _apply_memory(chain, confidence, memory_hits)
+
     return SynthesisResult(
         root_cause_chain=chain,
         confidence=round(confidence, 3),
@@ -172,7 +196,59 @@ def _rule_synthesis(
         top_frame=top["frame"] if top else None,
         top_frame_lens=top["lens"] if top else None,
         anomaly_methods=anomaly_methods,
+        memory_refs=mem_refs,
+        memory_influenced=bool(mem_refs),
+        playbook_refs=pb_refs,
+        playbook_influenced=bool(pb_refs),
     )
+
+
+def _apply_memory(chain: list[str], base_confidence: float, memory_hits: list):
+    """Fold recalled cases into a rule-based chain and adjust confidence.
+
+    Only a *verified* past analysis may move confidence. Two things are
+    deliberately excluded:
+
+    - **unverified analyses**, because they are this system's own past guesses.
+      Letting them raise confidence closes a loop — "I concluded this before, so
+      I'm surer I'm right" — with no new evidence anywhere in it.
+    - **playbooks**, because shipped documentation is not evidence that anything
+      happened on this host.
+
+    Both still appear in the chain as context; they just don't move the number.
+    """
+    mem_refs: list[str] = []
+    pb_refs: list[str] = []
+    confidence = base_confidence
+
+    for hit in memory_hits:
+        if getattr(hit, "kind", "analysis") == "playbook":
+            pb_refs.append(hit.point_id)
+            chain.append(
+                f"[Playbook] {hit.title or 'known issue'} — ตรงกัน {hit.similarity:.0%} "
+                f"(ความรู้ทั่วไปของ engine ยังไม่ยืนยันว่าเกิดกับ host นี้)"
+            )
+            continue
+
+        mem_refs.append(hit.point_id)
+        mark = "✓ ยืนยันแล้ว" if hit.verified else "ยังไม่ยืนยัน"
+        chain.append(
+            f"[Memory] เคยเจออาการคล้ายกันเมื่อ {hit.days_ago} วันก่อน · "
+            f"ตรงกัน {hit.similarity:.0%} · {mark} · เจอซ้ำ {hit.occurrence_count} ครั้ง"
+        )
+        if hit.verified and hit.actual_fix:
+            chain.append(f"[Memory] ครั้งนั้นแก้ได้จริงด้วย: {hit.actual_fix}")
+
+    verified = [h for h in memory_hits
+                if getattr(h, "kind", "analysis") == "analysis" and h.verified]
+    if verified:
+        top = max(verified, key=lambda h: h.similarity)
+        if top.similarity >= MEM_SIM_STRONG:
+            confidence = min(0.95, base_confidence + 0.35)
+        elif top.similarity >= MEM_SIM_MODERATE:
+            confidence = min(0.85, base_confidence + 0.20)
+
+    return chain, confidence, mem_refs, pb_refs
 
 
 # ─── LLM judge prompt ────────────────────────────────────────────────────────
@@ -189,6 +265,7 @@ def _build_judge_prompt(
     top_errors: list[dict] | None = None,
     propagation_lines: list[str] | None = None,
     knowledge_lines: list[str] | None = None,
+    memory_hits: list | None = None,
 ) -> str:
     relevant_frames = [f for f in mirofish_frames if f["relevance"] > 0]
     frame_lines = []
@@ -234,6 +311,8 @@ def _build_judge_prompt(
         if trend:
             predictor_block += f"\n  trend={trend.get('direction')} slope/hr={trend.get('slope_per_hour')}"
 
+    memory_block, playbook_block = _memory_blocks(memory_hits or [])
+
     return f"""You are an AIOps LLM Judge for a POS (Point-of-Sale) retail system.
 Your job is root-cause analysis: trace the observed symptoms back to the single
 most likely underlying cause. Distinguish cause from symptom — an error message
@@ -269,12 +348,20 @@ degrade, and when):
 Known issues for this host's software/OS versions (from accumulated research):
 {knowledge_block}
 
+## ประวัติที่ระบบนี้เคยวิเคราะห์ (INTERNAL MEMORY)
+{memory_block}
+
+## ความรู้อ้างอิงของ engine นี้ (PLAYBOOK)
+{playbook_block}
+
 Reply ONLY with a JSON object, no markdown fences:
 {{
   "root_cause_chain": ["<step1: what happened -> why -> downstream effect>", "<step2>", ...],
   "confidence": <float 0.0-1.0>,
   "fix_steps": ["<action1>", "<action2>", ...],
-  "reasoning": "<2-4 sentence explanation of how the evidence above points to this root cause, including what would confirm or rule it out>"
+  "reasoning": "<2-4 sentence explanation of how the evidence above points to this root cause, including what would confirm or rule it out>",
+  "memory_refs": ["<point_id ของเคสใน INTERNAL MEMORY ที่ใช้จริง>", ...],
+  "playbook_refs": ["<id ของ PLAYBOOK ที่ใช้จริง>", ...]
 }}
 
 Rules:
@@ -288,7 +375,65 @@ Rules:
 - web research is external/general context, not specific telemetry from this host — use it to
   corroborate or add detail to a cause already supported by the evidence above, never as the
   sole basis for root_cause_chain
-- If evidence is weak, say so explicitly in root_cause_chain and reflect it in confidence"""
+- If evidence is weak, say so explicitly in root_cause_chain and reflect it in confidence
+
+กติกาเรื่อง INTERNAL MEMORY และ PLAYBOOK:
+1. ถ้ามีเคสใน INTERNAL MEMORY ที่ "✓ ยืนยันแล้วโดยคน" และตรงกันสูง ให้ยึดเป็นหลัก
+   และใส่ point_id ของมันใน memory_refs
+2. ถ้าเคสเก่าขัดแย้งกับสัญญาณปัจจุบัน (A1/A3) ให้บอกออกมาตรงๆ ว่าขัดแย้ง อย่ากลบ
+   เขียนใน root_cause_chain ว่า "ต่างจากเคส #x ตรงที่..."
+3. ห้ามแต่ง point_id หรือ playbook id ที่ไม่ได้อยู่ในรายการข้างบน ถ้าไม่ได้ใช้อันไหน
+   ให้ปล่อย list ว่าง
+4. ถ้าไม่มีทั้งสองอย่างเลย ให้ทำงานแบบปกติ และปล่อย memory_refs/playbook_refs ว่าง
+5. เคสที่ "ยังไม่ยืนยัน" คือคำตอบที่ระบบนี้เดาเองในอดีต ยังไม่มีใครยืนยัน
+   ใช้เป็น context ประกอบได้ ห้ามยึดเป็นหลักฐานหลัก
+6. PLAYBOOK คือความรู้ทั่วไปของ engine นั้น ไม่ใช่เคสที่เคยเกิดบนเครื่องนี้
+   ให้ใช้เป็นสมมติฐานตั้งต้น และต้องเอา "วิธีตรวจสอบ" ของมันไปใส่ใน fix_steps
+   ก่อนขั้นตอนที่ลงมือแก้ เพื่อให้คนยืนยันก่อนทำ
+7. ถ้า INTERNAL MEMORY (ที่ยืนยันแล้ว) ขัดกับ PLAYBOOK ให้ยึด INTERNAL MEMORY
+   แล้วบอกว่าต่างจากตำราตรงไหน"""
+
+
+def _memory_blocks(memory_hits: list) -> tuple[str, str]:
+    """Render recalled cases as two clearly separated sections.
+
+    Keeping them apart is the point: one is what happened on this host before,
+    the other is general documentation. Merged into a single "context" block the
+    judge cannot tell which is evidence, and the rules above become unenforceable.
+    """
+    mem_lines: list[str] = []
+    pb_lines: list[str] = []
+
+    for i, hit in enumerate(memory_hits, 1):
+        if getattr(hit, "kind", "analysis") == "playbook":
+            pb_lines.append(
+                f"[KB-{i}] {hit.title} · ตรงกัน {hit.similarity:.2f}\n"
+                f"    อาการที่รู้จัก: {hit.symptom_text[:200]}\n"
+                f"    สาเหตุที่เป็นไปได้: {'; '.join(hit.root_cause_chain[:3])}\n"
+                f"    วิธีตรวจสอบ: {'; '.join(hit.verify_steps[:3])}\n"
+                f"    วิธีแก้: {'; '.join(hit.fix_steps[:4])}\n"
+                f"    อ้างอิง: {hit.docs_url or '-'}"
+            )
+            continue
+
+        mark = "✓ ยืนยันแล้วโดยคน" if hit.verified else "ยังไม่ยืนยัน"
+        outcome = (
+            f"วิธีที่แก้ได้จริง: {hit.actual_fix}"
+            if hit.verified and hit.actual_fix
+            else f"เสนอให้แก้: {'; '.join(hit.fix_steps[:3])}"
+        )
+        mem_lines.append(
+            f"[{hit.point_id}] เมื่อ {hit.days_ago} วันก่อน · ตรงกัน {hit.similarity:.2f} · "
+            f"{mark} · เจอซ้ำ {hit.occurrence_count} ครั้ง\n"
+            f"    อาการ: {hit.symptom_text[:300]}\n"
+            f"    สรุปตอนนั้น: {'; '.join(hit.root_cause_chain[:3])}\n"
+            f"    {outcome}"
+        )
+
+    return (
+        "\n".join(mem_lines) or "  (ไม่มีประวัติที่ตรงกัน)",
+        "\n".join(pb_lines) or "  (ไม่มี playbook ที่ตรงกัน)",
+    )
 
 
 # ─── Main entry points ────────────────────────────────────────────────────────
@@ -300,10 +445,12 @@ def synthesize_rule(
     mirofish_frames: list[dict],
     trend: dict | None = None,
     prediction: dict | None = None,
+    memory_hits: list | None = None,
 ) -> SynthesisResult:
     """Rule-only pass — instant, no LLM dependency. Its `top_frame` is used to
     build the A2 Perplexica query, so this must run before A2."""
-    return _rule_synthesis(host, health_score, anomalies, mirofish_frames, trend, prediction)
+    return _rule_synthesis(host, health_score, anomalies, mirofish_frames,
+                           trend, prediction, memory_hits)
 
 
 async def synthesize(
@@ -318,6 +465,7 @@ async def synthesize(
     top_errors: list[dict] | None = None,
     propagation_lines: list[str] | None = None,
     knowledge_lines: list[str] | None = None,
+    memory_hits: list | None = None,
     ollama_generate=None,
     model: str = "",
     base_url: str = "",
@@ -339,6 +487,7 @@ async def synthesize(
         top_errors=top_errors,
         propagation_lines=propagation_lines,
         knowledge_lines=knowledge_lines,
+        memory_hits=memory_hits,
     )
     try:
         raw = await ollama_generate(
@@ -349,15 +498,60 @@ async def synthesize(
             temperature=temperature,
         )
         parsed = json.loads(raw.strip())
+
+        # Keep only ids we actually offered. A small model will happily invent a
+        # plausible-looking point_id, and a fabricated citation is worse than no
+        # citation — it makes an unsupported claim look sourced.
+        offered_mem = {h.point_id for h in (memory_hits or [])
+                       if getattr(h, "kind", "analysis") == "analysis"}
+        offered_pb = {h.point_id for h in (memory_hits or [])
+                      if getattr(h, "kind", "analysis") == "playbook"}
+        mem_refs = [r for r in (parsed.get("memory_refs") or []) if r in offered_mem]
+        pb_refs = [r for r in (parsed.get("playbook_refs") or []) if r in offered_pb]
+        dropped = (len(parsed.get("memory_refs") or []) - len(mem_refs)
+                   + len(parsed.get("playbook_refs") or []) - len(pb_refs))
+        if dropped:
+            logger.warning("AA cited %d id(s) that were never offered — dropped (host=%s)",
+                           dropped, host)
+
+        # The judge is free to state its own confidence, but evidence-based
+        # boosting stays with the same rule everywhere: only a verified past
+        # case moves the number, and never past its ceiling.
+        confidence = float(parsed.get("confidence", rule_result.confidence))
+        cited = [h for h in (memory_hits or []) if h.point_id in set(mem_refs)]
+        verified_cited = [h for h in cited if h.verified]
+        if verified_cited:
+            top = max(verified_cited, key=lambda h: h.similarity)
+            if top.similarity >= MEM_SIM_STRONG:
+                confidence = min(0.95, max(confidence, rule_result.confidence + 0.35))
+            elif top.similarity >= MEM_SIM_MODERATE:
+                confidence = min(0.85, max(confidence, rule_result.confidence + 0.20))
+        elif cited:
+            # The judge said it leaned on recalled cases, but none of them were
+            # ever confirmed by a human — they are this system's own earlier
+            # guesses. Letting that raise confidence is the circular loop the
+            # design specifically rules out: no new evidence entered the system,
+            # so the number must not move. Unverified cases stay as context.
+            if confidence > rule_result.confidence:
+                logger.info(
+                    "AA confidence %.2f -> %.2f for %s — cited only unverified memory",
+                    confidence, rule_result.confidence, host,
+                )
+                confidence = rule_result.confidence
+
         return SynthesisResult(
             root_cause_chain=parsed.get("root_cause_chain", rule_result.root_cause_chain),
-            confidence=float(parsed.get("confidence", rule_result.confidence)),
+            confidence=confidence,
             fix_steps=parsed.get("fix_steps", rule_result.fix_steps),
             method="llm",
             top_frame=rule_result.top_frame,
             top_frame_lens=rule_result.top_frame_lens,
             anomaly_methods=rule_result.anomaly_methods,
             reasoning=parsed.get("reasoning"),
+            memory_refs=mem_refs,
+            memory_influenced=bool(mem_refs),
+            playbook_refs=pb_refs,
+            playbook_influenced=bool(pb_refs),
         )
     except Exception as exc:
         logger.warning("AA Synthesizer LLM failed for %s: %s — falling back to rule", host, exc)

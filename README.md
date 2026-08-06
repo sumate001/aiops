@@ -8,25 +8,37 @@ Mixture of Agents (MoA) architecture สำหรับวิเคราะห�
 ┌─────────────────────────────────────────────────────────┐
 │                    GodEyes AIOps                        │
 │                                                         │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐             │
-│  │    A1    │  │    A2    │  │    A3    │             │
-│  │ Rule +  │  │Perplexica│  │ MiroFish │             │
-│  │Isolation │  │ SearXNG  │  │ 5-Frame  │             │
-│  │ Forest   │  │+ AI Syn  │  │ Analysis │             │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘             │
-│       │              │              │                   │
-│       └──────────────┼──────────────┘                   │
-│                      ▼                                  │
-│              ┌──────────────┐                           │
-│              │      AA      │                           │
-│              │  Synthesizer │                           │
-│              │ LLM-as-Judge │                           │
-│              └──────┬───────┘                           │
-│                     ▼                                   │
-│           root_cause_chain                              │
-│           confidence score                              │
-│           fix_steps                                     │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐ ┌──────────┐ │
+│  │    A1    │  │    A2    │  │    A3    │ │    A4    │ │
+│  │ Rule +   │  │Perplexica│  │ MiroFish │ │  Memory  │ │
+│  │Isolation │  │ SearXNG  │  │ 5-Frame  │ │  Qdrant  │ │
+│  │ Forest   │  │+ AI Syn  │  │ Analysis │ │ +Playbook│ │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘ └────┬─────┘ │
+│       │              │              │            │      │
+│       └──────────────┴──────┬───────┴────────────┘      │
+│                             ▼                           │
+│                     ┌──────────────┐                    │
+│                     │      AA      │                    │
+│                     │  Synthesizer │                    │
+│                     │ LLM-as-Judge │                    │
+│                     └──────┬───────┘                    │
+│                            ▼                            │
+│                  root_cause_chain                       │
+│                  confidence score                       │
+│                  fix_steps                              │
+│                            │                            │
+│                            ▼                            │
+│              ┌──────────────────────────┐               │
+│              │  operator verdict         │              │
+│              │  ✓ ถูก / ~ บางส่วน / ✗ ผิด │              │
+│              └────────────┬─────────────┘               │
+│                           │ verified=true               │
+│                           └──────► กลับเข้า A4 ◄────────┤
 └─────────────────────────────────────────────────────────┘
+
+ผลวิเคราะห์ทุกครั้งถูกเก็บกลับเข้า A4 แต่ confidence จะขยับก็ต่อเมื่อมีคนยืนยัน
+เท่านั้น — เคสที่ยังไม่ยืนยันคือคำตอบที่ระบบเดาเอง ถ้าปล่อยให้มันดัน confidence
+จะกลายเป็นวงจรปิดที่ระบบมั่นใจขึ้นเพราะคำเดาของตัวเองโดยไม่มีหลักฐานใหม่
 ```
 
 ## Agents
@@ -36,6 +48,7 @@ Mixture of Agents (MoA) architecture สำหรับวิเคราะห�
 | **A1** | Rule + Isolation Forest | Rule-based anomaly detection + multivariate statistical ML (9 features) + metric threshold check (มี unit-mismatch guard) |
 | **A2** | Perplexica | External knowledge enrichment ผ่าน SearXNG + AI synthesis (chat ผ่าน provider ที่เลือก, embedding บน Transformers ในเครื่อง) — มี result cache 6h + cooldown 60s กัน upstream แบน |
 | **A3** | MiroFish | 5-frame multi-perspective analysis: Security, Database, Network, Hardware, Software — แต่ละ frame ให้ expert insight 3-5 ประโยค |
+| **A4** | Memory (Qdrant) | ค้นเคสที่เคยวิเคราะห์บน host นี้ + playbook ที่ ship มากับระบบ · hybrid dense (multilingual-e5-small) + sparse BM25 เพราะ error code อย่าง `ORA-01555` dense จับไม่ได้ · timeout 2s แล้วไปต่อ — memory เป็นส่วนเสริม ไม่ใช่ dependency |
 | **AA** | Synthesizer | 2 pass: rule pass (เร็ว, ใช้สร้าง A2 query) → LLM-as-Judge pass ที่เห็นหลักฐานจริงครบ (error/warn messages, MiroFish insights, ค่า metric, ผล A2) → root_cause_chain + confidence + fix_steps + reasoning |
 
 > 🤖 ทุก stage ที่ใช้ AI (A3 / AA / A2-chat) เลือก **provider** ได้อิสระ — local Ollama หรือ
@@ -51,6 +64,15 @@ aiops repo (3 branches)
 └── godeyes       → docker-compose + Prometheus + Grafana + Perplexica + SearXNG
 ```
 
+> ⚠️ **`godeyes` ไม่ใช่ branch ของ app** — มัน **ไม่มี history ร่วมกับ main เลย**
+> (`git merge-base main origin/godeyes` ว่างเปล่า) เป็น orphan branch ที่เก็บแต่ไฟล์
+> deployment 12 ไฟล์ ไม่มี `app/` เลย กลไก deploy จริงของ main คือ `deploy.sh`
+>
+> **`searxng/settings.yml` บน branch นั้น drift จากที่รันจริงแล้ว** — ยังเป็นของเดิม
+> ที่เปิด google/bing/duckduckgo ส่วนคอนเทนเนอร์จริงปิดเอนจินพวกนั้นไปแล้วเพราะโดน
+> CAPTCHA/429 ban ถ้า redeploy จาก branch นี้โดยไม่ reconcile ก่อน การจูน A2 ทั้งหมด
+> จะถูกล้างกลับ (ดู `docs/a2-status.md`)
+
 ### main branch (log-analyzer)
 
 ```
@@ -58,7 +80,12 @@ app/
 ├── config.py                    # AppConfig (YAML-based)
 ├── main.py                      # FastAPI entrypoint :8200 + GET /metrics
 ├── knowledge/
-│   └── pos.py                   # POS domain signal extraction
+│   ├── pos.py                   # POS domain signal extraction
+│   └── playbooks/               # A4 cold-start knowledge (31 entries)
+│       ├── __init__.py          #   registry + validation
+│       ├── mysql.py
+│       ├── postgresql.py
+│       └── mongodb.py
 ├── models/
 │   ├── request.py               # AnalyzeRequest, IngestRequest
 │   └── response.py              # HostAnalysis, MiroFishFrame, Synthesis, etc.
@@ -66,9 +93,14 @@ app/
 │   ├── analyze.py               # POST /analyze — full MoA pipeline (resolves per-stage LLM)
 │   ├── ingest.py                # POST /ingest — log ingestion from LogSim
 │   ├── config_router.py         # GET/POST /api/config + /api/llm/providers, /api/llm/models
+│   ├── feedback_router.py       # verdict endpoints + /api/memory/*
 │   └── results_router.py        # GET /api/results, GET /api/status
 └── services/
     ├── baseline_store.py        # SQLite window_stats persistence
+    ├── embedder.py              # A4 — multilingual-e5-small (query:/passage: prefixes)
+    ├── feedback_store.py        # SQLite memory_links + playbook_overrides
+    ├── memory_store.py          # A4 — Qdrant hybrid search (dense + BM25, RRF)
+    ├── normalize.py             # log → stable text (keeps ORA-xxxxx, errno N, HTTP 5xx)
     ├── llm.py                   # Unified LLM gateway (Ollama-native + OpenAI-compatible)
     ├── llm_providers.py         # Registry of 13 free / OpenAI-compatible providers
     ├── log_ml_client.py         # HTTP client → log-ml :3050
@@ -79,12 +111,13 @@ app/
     ├── perplexica_client.py     # A2 — Perplexica search + provider/embedding wiring
     ├── predictor.py             # Trend analysis + prediction
     ├── result_store.py          # SQLite result store (max 500, auto-pruned)
+    ├── service_detector.py      # regex → mysql | postgresql | mongodb (A4 filter)
     └── synthesizer.py           # AA — LLM-as-Judge synthesis
 
 frontend/                        # Next.js UI :3002 (production: next build + next start)
 ├── pages/
 │   ├── index.tsx                # Dashboard — pipeline status + recent results
-│   ├── results.tsx              # Results viewer (MiroFish frames, AA synthesis)
+│   ├── results.tsx              # Results viewer + 🧠 memory panel + ปุ่ม feedback ต่อ host
 │   └── settings.tsx             # Settings — Default AI + per-stage override + model dropdowns
 └── next.config.mjs              # Proxy rewrites → backend :8200, Ollama, Perplexica
 ```
@@ -109,7 +142,7 @@ app/
 ### 🚀 One-command deploy (recommended)
 
 ติดตั้ง + start ทุก service ด้วยคำสั่งเดียว — backend, log-ml (A1-IF), Perplexica/Vane,
-SearXNG (docker) และ frontend:
+SearXNG (docker), **Qdrant (docker — A4 memory)** และ frontend:
 
 ```bash
 git clone https://github.com/sumate001/aiops.git && cd aiops
@@ -128,8 +161,19 @@ sudo -E bash deploy.sh
 > จากนั้น **logout/login ครั้งเดียว** (หรือ `newgrp docker`) แล้วรอบถัดไปรัน `bash deploy.sh`
 > ได้เลยไม่ต้อง sudo (แนะนำ — venv/ไฟล์จะไม่ถูก root ยึด + ไม่ต้องลง Node ซ้ำใน /root)
 
-**Prerequisites:** Python 3.11+ (3.14 แนะนำ), **Node ≥ 18 (22 แนะนำ — `nvm use 22`)**, Docker (สำหรับ SearXNG)
+**Prerequisites:** Python 3.11+ (3.14 แนะนำ), **Node ≥ 18 (22 แนะนำ — `nvm use 22`)**, Docker (SearXNG + Qdrant)
 deploy.sh จะเช็คให้และหยุดพร้อมบอกวิธีแก้ถ้าขาด
+
+> 💾 **Qdrant เก็บความจำของ A4 ไว้ใน named volume `aiops-qdrant-data`**
+> `deploy.sh --stop` จะ **stop เท่านั้น ไม่ `rm`** — ลบ volume นี้ทิ้งเมื่อไหร่
+> เท่ากับต้องวิเคราะห์ทุกอย่างใหม่ตั้งแต่ต้น และ feedback ที่คนกดยืนยันไว้หายหมด
+>
+> ครั้งแรกหลังติดตั้ง ให้ seed playbook เข้าไปก่อน:
+> ```bash
+> python scripts/seed_playbooks.py     # 31 entries: mysql / postgresql / mongodb
+> ```
+> โมเดล embedding (~470MB) จะถูกดาวน์โหลดอัตโนมัติในครั้งแรก และ warm up
+> ตอน startup — ถ้าไม่ warm การค้นครั้งแรกจะชน timeout 2 วินาทีแล้วไม่ได้ memory เลย
 
 ```bash
 sudo bash deploy.sh --status   # ดูสถานะทุก service
@@ -220,6 +264,7 @@ docker-compose up -d
 #   log-ml          → http://localhost:3050
 #   perplexica UI   → http://localhost:3002
 #   searxng          → http://localhost:4000
+#   qdrant           → http://localhost:6333  (A4 memory)
 #   prometheus       → http://localhost:9090
 #   grafana          → http://localhost:3003 (admin/godeyes)
 ```
@@ -374,6 +419,48 @@ curl http://localhost:8200/api/results?limit=20&tenant_id=store-001
 
 ตรวจสอบสถานะ agent ทั้งหมด (log-ml, perplexica, llm)
 
+### Feedback / Memory (A4)
+
+feedback เป็นระดับ **(result_id, host)** เพราะผลวิเคราะห์หนึ่งครั้งครอบหลาย host
+และแต่ละ host มี memory point ของตัวเอง — ยืนยัน host หนึ่งต้องไม่ไปยืนยันตัวอื่น
+
+```bash
+# ยืนยันผล
+POST /api/results/{result_id}/hosts/{host}/feedback
+{
+  "verdict": "correct" | "partial" | "wrong",
+  "actual_root_cause": "string | null",
+  "actual_fix": "string | null",
+  "resolved_by": "string | null",
+  "note": "string | null"
+}
+→ 200 { "ok": true, "memory_point_id": "..." }
+```
+
+| verdict | ผลที่เกิด |
+|---|---|
+| `correct` | `verified=true` คงเนื้อหาเดิม |
+| `partial` | `verified=true` + เก็บ `actual_*` เพิ่ม (ไม่ทับของเดิม) |
+| `wrong` | `verified=true` + เขียนทับ root_cause_chain/fix_steps ด้วยของจริง |
+
+- **`wrong` ที่ไม่ส่ง `actual_root_cause` หรือ `actual_fix` มาจะได้ 400** — เคสที่
+  ระบบตอบผิดแล้วคนแก้ให้ คือข้อมูลที่มีค่าที่สุดและหายง่ายที่สุด ถ้าบันทึกแค่ว่า
+  "ผิด" โดยไม่เก็บว่าที่ถูกคืออะไร entry นั้นจะไร้ประโยชน์แถมติดสถานะ verified ค้างไว้
+- **ไม่แก้ vector** — อาการยังเป็นอาการเดิม ที่ผิดคือคำตอบ ไม่ใช่คำถาม
+
+```bash
+GET    /api/results/{result_id}/hosts/{host}/feedback   # ดู feedback ที่มีอยู่
+GET    /api/memory/stats                                 # total/verified/by_kind/top_recurring
+POST   /api/memory/{point_id}/deprecate?tenant_id=...    # เคสล้าสมัย
+DELETE /api/memory/{point_id}?confirm=true               # ลบถาวร
+```
+
+**409 เมื่อยิงใส่ playbook** — feedback และ DELETE ที่ชี้ไปที่ playbook จะถูกปฏิเสธ
+เพราะ playbook อยู่ใต้ tenant `__global__` ใช้ร่วมกันทุกเจ้า การแก้ตรงนี้จะเปลี่ยน
+ให้ทุก tenant และ seed รอบหน้าจะทับกลับอยู่ดี → ให้แก้ไฟล์ใน
+`app/knowledge/playbooks/` แล้ว re-seed แทน
+ส่วน `deprecate` ที่ชี้ไปที่ playbook จะบันทึกแบบ **แยกต่อ tenant** (scope: tenant)
+
 ### GET /metrics
 
 Prometheus metrics endpoint — scraped ทุก 15 วินาที
@@ -396,6 +483,20 @@ Health check
 | `godeyes_synthesis_confidence` | Gauge | AA Synthesizer confidence (0-1) |
 | `godeyes_analyze_requests_total` | Counter | Total /analyze requests |
 | `godeyes_analyze_duration_seconds` | Histogram | Request duration |
+| `godeyes_memory_hits_total` | Counter | เคสเก่าที่ A4 ค้นเจอ |
+| `godeyes_memory_verified_hits_total` | Counter | เคสที่ค้นเจอและมีคนยืนยันแล้ว |
+| `godeyes_playbook_hits_total{engine}` | Counter | playbook ที่ A4 ค้นเจอ |
+| `godeyes_memory_search_duration_seconds` | Histogram | latency ของการค้น A4 |
+| `godeyes_synthesis_memory_influenced_total` | Counter | ครั้งที่ AA อ้างเคสเก่าจริง |
+| `godeyes_feedback_total{verdict}` | Counter | verdict จากคน (correct/partial/wrong) |
+
+> **ตัวชี้วัดที่ควรจับตา:** สัดส่วน `godeyes_feedback_total{verdict="correct"}`
+> ต่อทั้งหมด ควรเพิ่มขึ้นตามเวลา ถ้าไม่เพิ่ม แปลว่าระบบแค่ "จำได้" แต่ไม่ได้
+> "เก่งขึ้น" — ต้องกลับไปดู scoring กับ prompt ของ AA ก่อนเพิ่มฟีเจอร์อื่น
+>
+> เทียบ `godeyes_memory_verified_hits_total` กับ `godeyes_memory_hits_total` ด้วย
+> ถ้า verified ต่ำมาตลอด แปลว่าไม่มีใครกดยืนยัน — memory จะไม่มีวันดัน confidence
+> เพราะเคสที่ยังไม่ยืนยันถูกออกแบบให้ขยับตัวเลขไม่ได้
 
 ## Grafana Dashboard
 

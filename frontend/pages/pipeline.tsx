@@ -91,16 +91,26 @@ function Section({ title, color = "border-gray-700", children }: {
   );
 }
 
-function Chip({ label, type }: { label: string; type: "in" | "out" }) {
+function Chip({ label, type }: { label: string; type: "in" | "out" | "cut" }) {
+  const style = {
+    in:  "border-blue-800 bg-blue-950/40 text-blue-300",
+    out: "border-emerald-800 bg-emerald-950/40 text-emerald-300",
+    // an input the backend deliberately withheld this run
+    cut: "border-gray-700 bg-gray-800/60 text-gray-500 line-through decoration-gray-600",
+  }[type];
   return (
-    <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border ${
-      type === "in"
-        ? "border-blue-800 bg-blue-950/40 text-blue-300"
-        : "border-emerald-800 bg-emerald-950/40 text-emerald-300"
-    }`}>
-      {type === "in" ? "↓" : "↑"} {label}
+    <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border ${style}`}>
+      {type === "out" ? "↑" : type === "cut" ? "✕" : "↓"} {label}
     </span>
   );
+}
+
+// A2's answer only counts as evidence when the web search actually returned
+// sources. With none, Perplexica still writes an answer from its own model's
+// memory — the backend keeps that out of the judge prompt, and the UI has to
+// show the same distinction or an operator will read it as researched fact.
+function grounded(host: HostAnalysis): boolean {
+  return (host.enrichment?.sources?.length ?? 0) > 0;
 }
 
 // ─── main ─────────────────────────────────────────────────────────────────────
@@ -311,13 +321,20 @@ export default function Pipeline() {
               {/* ── A2 Perplexica ────────────────────────────────────────── */}
               <div className="flex gap-1 items-center text-gray-700 pl-4"><span>↓</span></div>
               <Section title="A2 — Perplexica External Knowledge" color="border-violet-800">
-                <div className="flex gap-3 mb-3 flex-wrap">
-                  <Chip label="top_errors[] (query)" type="in" />
-                  <Chip label="anomaly patterns" type="in" />
+                {/* build_query() takes the single most specific signal, in this
+                    order — extra terms shrink the result set, they don't refine it. */}
+                <div className="flex gap-3 mb-3 flex-wrap items-center">
+                  <Chip label="mirofish keywords (A3)" type="in" />
+                  <span className="text-[10px] text-gray-600">→ ถ้าไม่มี →</span>
+                  <Chip label="top_errors[] (A1)" type="in" />
+                  <span className="text-[10px] text-gray-600">→ ถ้าไม่มี →</span>
+                  <Chip label="anomaly metrics (A1)" type="in" />
                 </div>
                 {!host.enrichment ? (
                   <p className="text-xs text-gray-600 bg-gray-800 rounded-lg p-3">
-                    Perplexica disabled — เปิดใช้ใน Settings เพื่อรับ external context
+                    ไม่มีผลจาก A2 — อาจเพราะปิดไว้ใน Settings, ไม่มีสัญญาณที่ค้นได้
+                    (keyword/error/metric ว่างทั้งหมด จึงข้ามการค้น), หรือเสิร์ชไม่สำเร็จ
+                    (timeout / cooldown) — ดูรายละเอียดที่ log ของ backend
                   </p>
                 ) : (
                   <div className="space-y-3">
@@ -325,16 +342,37 @@ export default function Pipeline() {
                       <p className="text-[10px] text-gray-600 uppercase mb-1">Query ที่ส่งไป</p>
                       <p className="text-xs text-gray-300 font-mono">{host.enrichment.query}</p>
                     </div>
-                    <div className="bg-gray-800 rounded-lg p-3">
-                      <p className="text-[10px] text-gray-600 uppercase mb-1">Answer (External Context)</p>
-                      <p className="text-xs text-gray-300 leading-relaxed">{host.enrichment.answer}</p>
+                    <div className={`rounded-lg p-3 ${grounded(host) ? "bg-gray-800" : "bg-amber-950/30 border border-amber-900"}`}>
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-[10px] text-gray-600 uppercase">Answer (External Context)</p>
+                        {!grounded(host) && (
+                          <span className="text-[10px] text-amber-400 bg-amber-950/40 border border-amber-800 rounded px-2 py-0.5">
+                            ⚠ 0 sources — ไม่ถูกส่งให้ AA
+                          </span>
+                        )}
+                      </div>
+                      {!grounded(host) && (
+                        <p className="text-[10px] text-amber-500/90 mb-2 leading-relaxed">
+                          เว็บเสิร์ชไม่เจออะไรเลย ข้อความข้างล่างจึงเป็นคำตอบที่โมเดลของ Perplexica
+                          เขียนเองจากความจำ ไม่ใช่หลักฐานที่ค้นมาได้ — แสดงไว้ให้ดูเฉยๆ
+                          และถูกกันออกจาก prompt ของ AA แล้ว
+                        </p>
+                      )}
+                      <p className={`text-xs leading-relaxed ${grounded(host) ? "text-gray-300" : "text-gray-500"}`}>
+                        {host.enrichment.answer}
+                      </p>
                     </div>
                     {host.enrichment.sources.length > 0 && (
                       <div>
-                        <p className="text-[10px] text-gray-600 uppercase mb-1">Sources</p>
+                        <p className="text-[10px] text-gray-600 uppercase mb-1">
+                          Sources ({host.enrichment.sources.length})
+                        </p>
                         <div className="flex gap-2 flex-wrap">
                           {host.enrichment.sources.map((s, i) => (
-                            <span key={i} className="text-[10px] text-blue-400 bg-blue-950/30 border border-blue-900 rounded px-2 py-0.5">{s.title}</span>
+                            <a key={i} href={s.url} target="_blank" rel="noreferrer"
+                               className="text-[10px] text-blue-400 bg-blue-950/30 border border-blue-900 rounded px-2 py-0.5 hover:border-blue-600">
+                              {s.title || s.url}
+                            </a>
                           ))}
                         </div>
                       </div>
@@ -392,7 +430,9 @@ export default function Pipeline() {
                 <div className="flex gap-3 mb-3 flex-wrap">
                   <Chip label="health_score (A1)" type="in" />
                   <Chip label="anomalies[] (A1)" type="in" />
-                  <Chip label="enrichment (A2)" type="in" />
+                  {host.enrichment && !grounded(host)
+                    ? <Chip label="enrichment (A2) — withheld, 0 sources" type="cut" />
+                    : <Chip label="enrichment (A2)" type="in" />}
                   <Chip label="mirofish frames (A3)" type="in" />
                 </div>
                 {!host.synthesis ? (

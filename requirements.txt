@@ -8,3 +8,17 @@ prometheus-client>=0.20.0
 scikit-learn>=1.4.0
 joblib>=1.3.0
 numpy>=1.26.0
+
+# A4 memory (Phase 2) — Qdrant + local embeddings
+qdrant-client>=1.15.0
+# fastembed ships Qdrant/bm25 for the sparse half of hybrid search. Needed
+# because dense vectors are poor at exact tokens like ORA-01555 or errno 111.
+fastembed>=0.8.0
+# Dense side: intfloat/multilingual-e5-small via sentence-transformers.
+# fastembed does not carry the *small* e5 variant (only e5-large, 1024-dim),
+# and 384 dims on CPU is the point.
+#
+# Install torch from the CPU index or pip drags in several GB of unused CUDA
+# wheels — this box has no GPU:
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch
+sentence-transformers>=5.0.0

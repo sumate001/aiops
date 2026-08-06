@@ -115,6 +115,41 @@ analyze_errors_total = Counter(
     "Total /analyze errors",
 )
 
+# ── A4 memory ─────────────────────────────────────────────────────────────────
+memory_hits_total = Counter(
+    "godeyes_memory_hits_total",
+    "Recalled cases returned by A4",
+)
+
+memory_verified_hits_total = Counter(
+    "godeyes_memory_verified_hits_total",
+    "Recalled cases that a human had confirmed",
+)
+
+playbook_hits_total = Counter(
+    "godeyes_playbook_hits_total",
+    "Shipped playbooks returned by A4",
+    ["engine"],
+)
+
+memory_search_duration_seconds = Histogram(
+    "godeyes_memory_search_duration_seconds",
+    "A4 memory search latency",
+)
+
+synthesis_memory_influenced_total = Counter(
+    "godeyes_synthesis_memory_influenced_total",
+    "Analyses where AA cited a recalled case",
+)
+
+# The ratio of correct over time is the measure of whether memory is actually
+# helping: if it doesn't rise, the system remembers without getting better.
+feedback_total = Counter(
+    "godeyes_feedback_total",
+    "Operator verdicts on analyses",
+    ["verdict"],
+)
+
 analyze_duration_seconds = Histogram(
     "godeyes_analyze_duration_seconds",
     "Duration of /analyze requests",

@@ -39,12 +39,17 @@ def init_result_table() -> None:
         """)
 
 
-def save_result(result: dict) -> None:
+def save_result(result: dict) -> int | None:
+    """Persist to SQLite (a cache for the UI) and return the row id.
+
+    The id is what A4's memory points reference back to, so a caller can open
+    the full analysis behind a recalled case.
+    """
     hosts = result.get("hosts", [])
     critical = sum(1 for h in hosts if h.get("status") == "critical")
     try:
         with _conn() as c:
-            c.execute("""
+            cur = c.execute("""
                 INSERT INTO analysis_results
                     (tenant_id, analyzed_at, window_from, window_to,
                      health_score, status, host_count, critical_count, summary, payload)
@@ -68,8 +73,10 @@ def save_result(result: dict) -> None:
                     SELECT id FROM analysis_results ORDER BY id DESC LIMIT ?
                 )
             """, (_MAX_RESULTS,))
+            return cur.lastrowid
     except Exception as exc:
         logger.warning("Failed to save analysis result: %s", exc)
+        return None
 
 
 def get_results(limit: int = 50, tenant_id: str | None = None) -> list[dict]:

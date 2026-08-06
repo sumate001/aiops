@@ -105,7 +105,7 @@ export default function Results() {
           ) : !detail ? (
             <p className="text-gray-500 text-sm">Not found</p>
           ) : (
-            <DetailView data={detail} />
+            <DetailView data={detail} resultId={selectedId} />
           )}
         </div>
       </div>
@@ -113,7 +113,7 @@ export default function Results() {
   );
 }
 
-function DetailView({ data }: { data: any }) {
+function DetailView({ data, resultId }: { data: any; resultId: number | null }) {
   const [tab, setTab] = useState<"overview" | "hosts" | "raw">("overview");
 
   return (
@@ -148,7 +148,7 @@ function DetailView({ data }: { data: any }) {
       </div>
 
       {tab === "overview" && <OverviewTab data={data} />}
-      {tab === "hosts" && <HostsTab hosts={data.hosts} />}
+      {tab === "hosts" && <HostsTab hosts={data.hosts} resultId={resultId} />}
       {tab === "raw" && (
         <pre className="text-xs text-gray-400 bg-gray-800 rounded-lg p-4 overflow-auto max-h-[60vh] whitespace-pre-wrap">
           {JSON.stringify(data, null, 2)}
@@ -203,7 +203,7 @@ function OverviewTab({ data }: { data: any }) {
   );
 }
 
-function HostsTab({ hosts }: { hosts: any[] }) {
+function HostsTab({ hosts, resultId }: { hosts: any[]; resultId: number | null }) {
   const [open, setOpen] = useState<string | null>(null);
 
   return (
@@ -257,6 +257,11 @@ function HostsTab({ hosts }: { hosts: any[] }) {
                   </ul>
                 </div>
               )}
+              <MemoryPanel hits={h.memory_hits} />
+              {/* Per host, not once per page: an analysis covers several hosts
+                  and each has its own memory point, so one verdict can't stand
+                  for all of them. */}
+              <FeedbackBox resultId={resultId} host={h.host} />
             </div>
           )}
         </div>
@@ -270,6 +275,270 @@ function Stat({ label, value }: { label: string; value: string }) {
     <div className="bg-gray-800 rounded-lg p-3 text-center">
       <p className="text-xl font-bold text-white">{value}</p>
       <p className="text-xs text-gray-400 mt-0.5">{label}</p>
+    </div>
+  );
+}
+
+// ─── A4 memory ──────────────────────────────────────────────────────────────
+
+type MemoryHit = {
+  point_id: string;
+  kind: string;
+  similarity: number;
+  final_score: number;
+  symptom_text: string;
+  root_cause_chain: string[];
+  fix_steps: string[];
+  verified: boolean;
+  actual_fix: string | null;
+  occurrence_count: number;
+  days_ago: number;
+  title: string | null;
+  verify_steps: string[];
+  docs_url: string | null;
+};
+
+function MemoryPanel({ hits }: { hits?: MemoryHit[] }) {
+  const [hidden, setHidden] = useState<Record<string, boolean>>({});
+  if (!hits?.length) return null;
+
+  const visible = hits.filter((h) => !hidden[h.point_id]);
+  if (!visible.length) return null;
+
+  const cases = visible.filter((h) => h.kind !== "playbook");
+  const playbooks = visible.filter((h) => h.kind === "playbook");
+
+  const deprecate = async (h: MemoryHit) => {
+    setHidden((s) => ({ ...s, [h.point_id]: true }));
+    await fetch(`/api/memory/${h.point_id}/deprecate`, { method: "POST" }).catch(() => {});
+  };
+
+  return (
+    <div className="mt-4 space-y-3">
+      {cases.length > 0 && (
+        <div>
+          <p className="text-xs text-gray-400 mb-1">🧠 เคยเจอมาก่อน</p>
+          <div className="space-y-2">
+            {cases.map((h) => (
+              <div key={h.point_id} className="bg-gray-900 rounded-lg p-3 border border-gray-700">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Green tick only for a human-confirmed case — an unverified
+                      entry is this system's own earlier guess and must not read
+                      as settled fact. */}
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                    h.verified
+                      ? "text-green-300 bg-green-950/40 border-green-800"
+                      : "text-gray-400 bg-gray-800 border-gray-600"
+                  }`}>
+                    {h.verified ? "✓ ยืนยันแล้ว" : "ยังไม่ยืนยัน"}
+                  </span>
+                  <span className="text-[11px] text-gray-400">
+                    {h.days_ago === 0 ? "วันนี้" : `${h.days_ago} วันก่อน`}
+                    {" · "}
+                    {/* similarity, not final_score: final_score is weighted for
+                        ranking and can exceed 1.0, so showing it as a match
+                        percentage would be a number the reader can't trust. */}
+                    ตรงกัน {Math.round(h.similarity * 100)}%
+                    {h.occurrence_count > 1 && ` · เจอซ้ำ ${h.occurrence_count} ครั้ง`}
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-300 mt-1.5 whitespace-pre-wrap line-clamp-3">
+                  {h.symptom_text}
+                </p>
+                {h.verified && h.actual_fix ? (
+                  <p className="text-[11px] text-green-300 mt-1.5">
+                    วิธีที่แก้ได้จริง: {h.actual_fix}
+                  </p>
+                ) : h.root_cause_chain?.length > 0 ? (
+                  <p className="text-[11px] text-gray-400 mt-1.5">
+                    สรุปตอนนั้น: {h.root_cause_chain[0]}
+                  </p>
+                ) : null}
+                <div className="flex gap-3 mt-2">
+                  <button
+                    onClick={() => deprecate(h)}
+                    className="text-[10px] text-gray-500 hover:text-red-400 transition-colors"
+                  >
+                    เคสนี้ล้าสมัยแล้ว
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {playbooks.length > 0 && (
+        <div>
+          {/* Kept visually separate from recalled cases: one is what happened
+              here before, the other is general engine documentation. */}
+          <p className="text-xs text-gray-400 mb-1">📘 ความรู้อ้างอิงของ engine</p>
+          <div className="space-y-2">
+            {playbooks.map((h) => (
+              <div key={h.point_id} className="bg-gray-900 rounded-lg p-3 border border-gray-800">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded border text-blue-300 bg-blue-950/30 border-blue-900">
+                    playbook
+                  </span>
+                  <span className="text-[11px] text-white font-medium">{h.title}</span>
+                  <span className="text-[11px] text-gray-500">ตรงกัน {Math.round(h.similarity * 100)}%</span>
+                </div>
+                {h.verify_steps?.length > 0 && (
+                  <p className="text-[11px] text-amber-300/90 mt-1.5">
+                    ตรวจก่อนลงมือ: {h.verify_steps[0]}
+                  </p>
+                )}
+                {h.fix_steps?.length > 0 && (
+                  <p className="text-[11px] text-gray-400 mt-1">วิธีแก้: {h.fix_steps[0]}</p>
+                )}
+                <div className="flex gap-3 mt-2">
+                  {h.docs_url && (
+                    <a href={h.docs_url} target="_blank" rel="noreferrer"
+                       className="text-[10px] text-blue-400 hover:text-blue-300">เอกสารอ้างอิง</a>
+                  )}
+                  <button
+                    onClick={() => deprecate(h)}
+                    className="text-[10px] text-gray-500 hover:text-red-400 transition-colors"
+                  >
+                    ไม่เกี่ยวกับระบบเรา
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Feedback ───────────────────────────────────────────────────────────────
+
+type Verdict = "correct" | "partial" | "wrong";
+
+function FeedbackBox({ resultId, host }: { resultId: number | null; host: string }) {
+  const [existing, setExisting] = useState<any | null>(null);
+  const [pending, setPending] = useState<Verdict | null>(null);
+  const [cause, setCause] = useState("");
+  const [fix, setFix] = useState("");
+  const [by, setBy] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!resultId) return;
+    fetch(`/api/results/${resultId}/hosts/${encodeURIComponent(host)}/feedback`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d?.verified) setExisting(d); })
+      .catch(() => {});
+  }, [resultId, host]);
+
+  if (!resultId) return null;
+
+  if (existing) {
+    return (
+      <div className="mt-4 border-t border-gray-700 pt-3">
+        <p className="text-[11px] text-green-300">
+          ✓ ยืนยันแล้ว{existing.resolved_by ? ` โดย ${existing.resolved_by}` : ""}
+          {existing.verified_at ? ` เมื่อ ${new Date(existing.verified_at).toLocaleString()}` : ""}
+          {existing.verdict ? ` · ${existing.verdict}` : ""}
+        </p>
+        {existing.actual_fix && (
+          <p className="text-[11px] text-gray-400 mt-1">วิธีที่แก้ได้จริง: {existing.actual_fix}</p>
+        )}
+      </div>
+    );
+  }
+
+  const submit = async (verdict: Verdict) => {
+    // "wrong" without the correction is refused by the API on purpose — saying
+    // only that we were wrong teaches the system nothing.
+    if (verdict === "wrong" && !cause.trim() && !fix.trim()) {
+      setError("กรุณาระบุว่าสาเหตุ/วิธีแก้ที่ถูกต้องคืออะไร");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const res = await fetch(
+      `/api/results/${resultId}/hosts/${encodeURIComponent(host)}/feedback`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          verdict,
+          actual_root_cause: cause.trim() || null,
+          actual_fix: fix.trim() || null,
+          resolved_by: by.trim() || null,
+        }),
+      },
+    ).catch(() => null);
+    setBusy(false);
+
+    if (!res || !res.ok) {
+      const detail = res ? await res.json().catch(() => null) : null;
+      setError(detail?.detail?.error || "ส่งไม่สำเร็จ");
+      return;
+    }
+    setExisting({
+      verified: true, verdict, resolved_by: by.trim() || null,
+      verified_at: new Date().toISOString(), actual_fix: fix.trim() || null,
+    });
+  };
+
+  return (
+    <div className="mt-4 border-t border-gray-700 pt-3">
+      <p className="text-xs text-gray-400 mb-2">ผลนี้ถูกต้องไหม?</p>
+      <div className="flex gap-2 flex-wrap">
+        <button
+          disabled={busy}
+          onClick={() => submit("correct")}
+          className="text-[11px] px-2.5 py-1 rounded border border-green-800 bg-green-950/40 text-green-300 hover:bg-green-900/50 disabled:opacity-50"
+        >✓ ถูก</button>
+        <button
+          disabled={busy}
+          onClick={() => setPending(pending === "partial" ? null : "partial")}
+          className={`text-[11px] px-2.5 py-1 rounded border border-yellow-800 bg-yellow-950/40 text-yellow-300 hover:bg-yellow-900/50 disabled:opacity-50 ${pending === "partial" ? "ring-1 ring-yellow-600" : ""}`}
+        >~ ถูกบางส่วน</button>
+        <button
+          disabled={busy}
+          onClick={() => setPending(pending === "wrong" ? null : "wrong")}
+          className={`text-[11px] px-2.5 py-1 rounded border border-red-800 bg-red-950/40 text-red-300 hover:bg-red-900/50 disabled:opacity-50 ${pending === "wrong" ? "ring-1 ring-red-600" : ""}`}
+        >✗ ผิด</button>
+      </div>
+
+      {pending && (
+        <div className="mt-3 space-y-2">
+          <p className="text-[11px] text-gray-500">
+            {pending === "wrong"
+              ? "ต้องระบุอย่างน้อยหนึ่งช่อง — เคสที่ระบบตอบผิดแล้วคนแก้ให้ คือข้อมูลที่มีค่าที่สุด"
+              : "เพิ่มรายละเอียดที่ขาดไป (ไม่บังคับ)"}
+          </p>
+          <textarea
+            value={cause} onChange={(e) => setCause(e.target.value)}
+            placeholder="สาเหตุที่แท้จริง"
+            className="w-full text-[11px] bg-gray-900 border border-gray-700 rounded p-2 text-gray-200"
+            rows={2}
+          />
+          <textarea
+            value={fix} onChange={(e) => setFix(e.target.value)}
+            placeholder="วิธีที่แก้ได้จริง"
+            className="w-full text-[11px] bg-gray-900 border border-gray-700 rounded p-2 text-gray-200"
+            rows={2}
+          />
+          <input
+            value={by} onChange={(e) => setBy(e.target.value)}
+            placeholder="ชื่อผู้ยืนยัน (ไม่บังคับ)"
+            className="w-full text-[11px] bg-gray-900 border border-gray-700 rounded p-2 text-gray-200"
+          />
+          <button
+            disabled={busy}
+            onClick={() => submit(pending)}
+            className="text-[11px] px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50"
+          >{busy ? "กำลังส่ง…" : "ส่ง"}</button>
+        </div>
+      )}
+
+      {error && <p className="text-[11px] text-red-400 mt-2">{error}</p>}
     </div>
   );
 }

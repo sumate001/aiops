@@ -46,6 +46,8 @@ PORT_LOG_ML="${PORT_LOG_ML:-3050}"
 PORT_VANE="${PORT_VANE:-3001}"
 PORT_UI="${PORT_UI:-3002}"
 PORT_SEARXNG="${PORT_SEARXNG:-4000}"
+PORT_QDRANT="${PORT_QDRANT:-6333}"
+PORT_QDRANT_GRPC="${PORT_QDRANT_GRPC:-6334}"
 OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434}"
 
 LOG_DIR="$SCRIPT_DIR/logs"
@@ -232,9 +234,32 @@ start_all() {
     sleep 4; ensure_searxng_json
   else
     log "creating SearXNG container on :$PORT_SEARXNG"
+    # Mount our settings.yml read-only. Without it the config lives only inside
+    # the container volume, has to be edited by hand with `docker exec`, and any
+    # rebuild silently reverts the engine tuning that A2 depends on.
     $DOCKER run -d --name aiops-searxng -p "${PORT_SEARXNG}:8080" \
+      -v "$SCRIPT_DIR/searxng/settings.yml:/etc/searxng/settings.yml:ro" \
       -e SEARXNG_SECRET="$(openssl rand -hex 32)" searxng/searxng:latest >/dev/null
     sleep 4; ensure_searxng_json
+  fi
+
+  # Qdrant (docker) — A4 long-term memory. Named volume so analyses survive a
+  # container rebuild; losing it means re-analysing everything from scratch.
+  if [ "${QDRANT_ENABLED:-1}" != 1 ]; then
+    warn "Qdrant skipped — A4 memory disabled, rest of stack runs"
+  elif ! command -v docker >/dev/null 2>&1; then
+    warn "Qdrant skipped (no Docker) — A4 memory disabled, rest of stack runs"
+  elif $DOCKER ps --format '{{.Names}}' | grep -q '^aiops-qdrant$'; then
+    ok "Qdrant already running"
+  elif $DOCKER ps -a --format '{{.Names}}' | grep -q '^aiops-qdrant$'; then
+    log "starting existing Qdrant container"; $DOCKER start aiops-qdrant >/dev/null; sleep 3
+  else
+    log "creating Qdrant container on :$PORT_QDRANT"
+    $DOCKER volume create aiops-qdrant-data >/dev/null
+    $DOCKER run -d --name aiops-qdrant --restart unless-stopped \
+      -p "${PORT_QDRANT}:6333" -p "${PORT_QDRANT_GRPC}:6334" \
+      -v aiops-qdrant-data:/qdrant/storage qdrant/qdrant:latest >/dev/null
+    sleep 3
   fi
 
   start_svc log-ml "$PORT_LOG_ML" log-ml.log \
@@ -258,6 +283,7 @@ start_all() {
   log "waiting for services…"
   wait_health "http://localhost:$PORT_LOG_ML/healthz"        "log-ml"
   [ "${SEARXNG_ENABLED:-1}" = 1 ] && wait_health "http://localhost:$PORT_SEARXNG/healthz" "SearXNG"
+  [ "${QDRANT_ENABLED:-1}" = 1 ] && wait_health "http://localhost:$PORT_QDRANT/healthz" "Qdrant"
   wait_health "http://localhost:$PORT_VANE/api/providers"    "Perplexica"
   wait_health "http://localhost:$PORT_BACKEND/healthz"       "backend"
   wait_health "http://localhost:$PORT_UI"                    "frontend"
@@ -282,6 +308,10 @@ stop_all() {
   done
   if command -v docker >/dev/null && $DOCKER ps --format '{{.Names}}' 2>/dev/null | grep -q '^aiops-searxng$'; then
     $DOCKER stop aiops-searxng >/dev/null && ok "stopped SearXNG"
+  fi
+  # Stop only — never `rm`. The named volume holds every analysis A4 remembers.
+  if command -v docker >/dev/null && $DOCKER ps --format '{{.Names}}' 2>/dev/null | grep -q '^aiops-qdrant$'; then
+    $DOCKER stop aiops-qdrant >/dev/null && ok "stopped Qdrant"
   fi
 }
 
@@ -318,7 +348,7 @@ update_all() {
 status_all() {
   printf "\n${c_info}=== Service status ===${c_off}\n"
   for entry in "backend:$PORT_BACKEND" "frontend:$PORT_UI" "perplexica:$PORT_VANE" \
-               "log-ml:$PORT_LOG_ML" "searxng:$PORT_SEARXNG"; do
+               "log-ml:$PORT_LOG_ML" "searxng:$PORT_SEARXNG" "qdrant:$PORT_QDRANT"; do
     local name="${entry%%:*}" port="${entry##*:}"
     if port_up "$port"; then printf "  ${c_ok}● UP  ${c_off} %-11s :%s\n" "$name" "$port"
     else printf "  ${c_err}○ down${c_off} %-11s :%s\n" "$name" "$port"; fi

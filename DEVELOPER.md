@@ -486,6 +486,89 @@ confidence = (risk/100 × 0.63)
 
 ---
 
+## 10.5 A4 Memory (Qdrant) — งานที่ต้องทำบ่อย
+
+### เพิ่ม / แก้ playbook
+
+playbook คือความรู้ที่ ship มากับระบบ ใช้ตอน memory ยังว่าง (cold start)
+**ไม่ใช่การ fine-tune** — มัน seed ลง collection เดียวกับที่ A4 ค้นอยู่แล้ว
+ผ่าน retrieval path เดิมทุกประการ
+
+```bash
+# 1. แก้ไฟล์ engine ที่ต้องการ
+vim app/knowledge/playbooks/mysql.py
+
+# 2. เช็คก่อน — registry validate ตอนดึงออก ผิดรูปจะ raise ทันที
+python -m pytest tests/test_playbooks.py -v
+
+# 3. ดูว่าจะ seed อะไรบ้างโดยยังไม่เขียนจริง
+python scripts/seed_playbooks.py --dry-run
+
+# 4. seed จริง (idempotent — รันซ้ำทับของเดิม ไม่สร้างซ้ำ)
+python scripts/seed_playbooks.py
+python scripts/seed_playbooks.py --engine mysql    # เฉพาะบาง engine
+```
+
+`id` ต้องขึ้นต้นด้วยชื่อ engine (`mysql.xxx`) และไม่ซ้ำ · bump `PLAYBOOK_VERSION`
+ใน `app/knowledge/playbooks/__init__.py` เมื่อแก้เนื้อหา
+
+**สิ่งที่ test บังคับไว้ และเหตุผล:**
+
+| กติกา | ทำไม |
+|---|---|
+| `symptom_text` ≥ 15 คำ | มันคือ field ที่ถูก embed — สั้นไปจะไม่ถูก retrieve |
+| `fix_steps` ต้องมีคำสั่งรันได้จริง | "ตรวจสอบ configuration" ไม่ช่วยใครตอนตี 3 |
+| `verify_steps` ≥ 1 ข้อ | playbook เป็นสมมติฐาน ไม่ใช่ข้อสรุป AA ถูกสั่งให้เอาไปใส่ก่อนขั้นตอนแก้ |
+| `error_codes` เป็น string | BM25 มอง `"1205"` กับ `1205` เป็นคนละ token |
+| เขียนด้วยคำของเราเอง | ห้าม copy จากเอกสาร vendor — ใส่ `docs_url` อ้างอิงแทน |
+
+### reset collection ทั้งก้อน
+
+```bash
+curl -X DELETE http://localhost:6333/collections/godeyes_memory
+python scripts/seed_playbooks.py     # สร้าง collection ใหม่ + seed playbook กลับ
+```
+
+⚠️ **สิ่งนี้ลบเคสจริงและ feedback ที่คนกดยืนยันไว้ทั้งหมด** ซึ่งกู้ไม่ได้ —
+ผลวิเคราะห์ใน SQLite ยังอยู่ แต่ `verified` / `actual_fix` ที่คนใส่มาอยู่ใน Qdrant
+เท่านั้น ก่อนทำ ให้ดูก่อนว่ากำลังจะทิ้งอะไร:
+
+```bash
+curl -s localhost:8200/api/memory/stats | python3 -m json.tool
+```
+
+### ปิดเคสที่ล้าสมัย
+
+time decay อย่างเดียวไม่พอ — เคสที่ verified ไว้ 8 เดือนก่อนยังถือตัวคูณ 1.6 อยู่
+หลัง upgrade MySQL แล้ว fix เดิมอาจใช้ไม่ได้แต่มันยังโผล่ขึ้นมาได้
+
+```bash
+# เคสจริง — ปิดทั้งระบบ
+curl -X POST "localhost:8200/api/memory/{point_id}/deprecate"
+
+# playbook — ปิดเฉพาะ tenant นั้น (ตัว point ที่ใช้ร่วมกันไม่ถูกแตะ)
+curl -X POST "localhost:8200/api/memory/{point_id}/deprecate?tenant_id=acme"
+```
+
+หรือกดปุ่มในหน้า Results — "เคสนี้ล้าสมัยแล้ว" / "ไม่เกี่ยวกับระบบเรา"
+
+### กับดักที่ควรรู้ก่อนแก้โค้ดตรงนี้
+
+- **มี similarity สองสเกล อย่าปนกัน** — ค้นหาใช้ query-vs-passage (ช่วง 0.72-0.96)
+  ส่วน dedup ใช้ passage-vs-passage (เหมือนกันเป๊ะ = 1.0) ถ้าเอา threshold ของ
+  ฝั่งหนึ่งไปใช้กับอีกฝั่ง มันจะพังเงียบๆ
+- **e5 ไม่เคยให้คะแนนใกล้ศูนย์** ข้อความที่ไม่เกี่ยวกันเลยยังได้ ~0.72-0.79
+  ดังนั้น threshold ต้องตั้งในช่วง 0.72-0.96 ไม่ใช่คิดแบบ 0-1
+- **`final_score` คำนวณจาก fused RRF score ไม่ใช่ similarity** ถ้าเปลี่ยนไปคำนวณจาก
+  similarity เมื่อไหร่ ผลของ BM25 จะหายไปทั้งหมด (วัดแล้ว: top-1 ตกจาก 8/8 เหลือ 6/8
+  บน query ที่เป็น error code)
+- **`similarity` เท่านั้นที่ตัดสิน confidence** `final_score` ถ่วงน้ำหนักแล้วและเกิน
+  1.0 ได้ ถ้าเอามาตัดสิน เคส verified ที่ตรงแค่ครึ่งเดียวจะดูเหมือนหลักฐานแน่น
+- **โมเดลทั้งสองตัวโหลดแบบ lazy** ทั้ง e5 และ BM25 — ต้อง warm up ตอน startup
+  ไม่งั้นการค้นครั้งแรกหลัง restart จะชน timeout 2 วินาทีแล้วไม่ได้ memory เลย
+
+---
+
 ## 11. Testing
 
 ```bash
@@ -495,6 +578,12 @@ python -m pytest tests/ -v
 # รันเฉพาะ module
 python -m pytest tests/test_godeyes_adapter.py -v
 python -m pytest tests/test_log_processor.py -v
+
+# A4 memory / feedback — ไม่ต้องมี Qdrant หรือ LLM จริง (mock + in-memory Qdrant)
+python -m pytest tests/test_memory_store.py tests/test_embedder.py \
+                 tests/test_normalize.py tests/test_playbooks.py \
+                 tests/test_service_detector.py tests/test_feedback.py \
+                 tests/test_synthesizer_memory.py -v
 
 # รันพร้อม coverage
 python -m pytest tests/ --cov=app --cov-report=term-missing
