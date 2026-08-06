@@ -61,6 +61,10 @@ class Synthesis(BaseModel):
     top_frame_lens: str | None = None
     anomaly_methods: list[str] = []
     reasoning: str | None = None
+    memory_refs: list[str] = []       # point_id ที่ AA อ้างถึงจริง
+    memory_influenced: bool = False   # AA ใช้ memory ในการสรุปไหม
+    playbook_refs: list[str] = []     # playbook id ที่ AA อ้างถึง
+    playbook_influenced: bool = False
 
 
 class TopError(BaseModel):
@@ -75,6 +79,32 @@ class Explanation(BaseModel):
     likely_causes: list[str] = []
     affected_metrics: list[str] = []
     suggested_actions: list[str] = []
+
+
+class MemoryHit(BaseModel):
+    """One recalled case (A4). Two scores, deliberately kept apart:
+
+    `similarity` is the raw cosine from Qdrant and is the only one allowed to
+    decide confidence. `final_score` is weighted for ranking and can exceed 1.0
+    — using it for confidence would let a barely-relevant verified case look
+    like strong evidence.
+    """
+    point_id: str
+    kind: str = "analysis"          # analysis | playbook
+    similarity: float               # raw — drives confidence
+    final_score: float              # weighted — drives ordering only
+    symptom_text: str
+    root_cause_chain: list[str] = []
+    fix_steps: list[str] = []
+    verified: bool = False
+    actual_fix: str | None = None
+    occurrence_count: int = 0
+    created_at: str = ""
+    days_ago: int = 0
+    # playbook-only
+    title: str | None = None
+    verify_steps: list[str] = []
+    docs_url: str | None = None
 
 
 class HostAnalysis(BaseModel):
@@ -97,6 +127,7 @@ class HostAnalysis(BaseModel):
     mirofish: list[MiroFishFrame] = []
     synthesis: Synthesis | None = None
     enrichment: PerplexicaEnrichment | None = None
+    memory_hits: list[MemoryHit] = []
 
 
 class PropagationIncident(BaseModel):

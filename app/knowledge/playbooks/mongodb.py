@@ -291,6 +291,37 @@ PLAYBOOK_ENTRIES: list[dict] = [
         "applies_to": ">=4.4",
     },
     {
+        "id": "mongodb.duplicate_key",
+        "engine": "mongodb",
+        "frame": "Software",
+        "severity": "medium",
+        "title": "E11000 duplicate key error",
+        "symptom_text": (
+            "mongodb E11000 duplicate key error collection index dup key "
+            "DuplicateKey insert failed unique index violation upsert conflict "
+            "เขียนข้อมูลซ้ำค่าที่ unique index ห้ามซ้ำ"
+        ),
+        "error_codes": ["E11000", "11000"],
+        "root_cause_chain": [
+            "มีการเขียน document ที่ค่าซ้ำกับ unique index ที่มีอยู่",
+            "MongoDB ปฏิเสธการเขียนนั้นทั้ง operation",
+            "ในระบบที่มี retry อัตโนมัติ อาการนี้มักโผล่ตอน retry คำสั่งที่จริงๆ สำเร็จไปแล้วรอบแรก",
+        ],
+        "verify_steps": [
+            "อ่านข้อความ error ให้ครบ — จะบอกชื่อ index และค่า dup key ที่ชนมาตรงๆ",
+            "db.<coll>.getIndexes() — ยืนยันว่า index นั้น unique จริงและครอบคลุม field ที่คิด",
+        ],
+        "fix_steps": [
+            "db.<coll>.getIndexes() — ดูว่า unique index ตัวไหนที่ชน และครอบคลุม field อะไรบ้าง",
+            "db.<coll>.find({<field>: <dup_value>}) — ดูว่า document เดิมที่ชนอยู่คืออันไหน",
+            "ถ้าเป็นการ retry ที่ควรทำซ้ำได้: เปลี่ยนไปใช้ updateOne(..., {upsert: true}) แทน insertOne เพื่อให้ operation idempotent",
+            "ถ้าข้อมูลซ้ำเป็นของจริงที่ไม่ควรมี: db.<coll>.aggregate([{$group: {_id: '$<field>', n: {$sum: 1}}}, {$match: {n: {$gt: 1}}}]) เพื่อหาทั้งหมดก่อนล้าง",
+            "อย่าลบ unique index ทิ้งเพื่อให้ error หาย — มันคือสิ่งเดียวที่กันข้อมูลซ้ำอยู่",
+        ],
+        "docs_url": "https://www.mongodb.com/docs/manual/core/index-unique/",
+        "applies_to": ">=4.4",
+    },
+    {
         "id": "mongodb.chunk_migration_stuck",
         "engine": "mongodb",
         "frame": "Database",
