@@ -79,6 +79,9 @@ class Explanation(BaseModel):
 
 class HostAnalysis(BaseModel):
     host: str
+    # Database engine inferred from the log text (mysql | postgresql | mongodb),
+    # None when it couldn't be told apart. Filters A4's memory/playbook search.
+    detected_service: str | None = None
     service_profile: str | None = None
     criticality: str | None = None
     entry_count: int

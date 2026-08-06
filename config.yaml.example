@@ -74,3 +74,12 @@ analysis:
     disk_usage: { warn: 85, critical: 95, direction: above, unit: percent }
     disk_free:  { warn: 15, critical: 5,  direction: below, unit: percent }
     latency:    { warn: 500, critical: 1000, direction: above, unit: ms }
+
+# ตรวจว่า log ของแต่ละ host มาจาก DB engine ไหน (regex ล้วน ไม่ใช้ LLM)
+# ผลไปอยู่ที่ HostAnalysis.detected_service — A4 ใช้ filter หา memory/playbook
+# ถ้า ingest ระบุ service มาแล้วและเป็น engine ที่รู้จัก จะใช้ค่านั้นก่อน
+service_detection:
+  enabled: true
+  sample_lines: 50            # ดูแค่ N บรรทัดแรกพอ ไม่ต้องสแกนทั้งหมด
+  # ต่ำกว่านี้คืน None — filter ผิด engine แย่กว่าไม่ filter เลย
+  min_confidence: 0.6

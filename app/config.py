@@ -24,6 +24,15 @@ class LogMlConfig(BaseModel):
     enabled: bool = True
 
 
+class ServiceDetectionConfig(BaseModel):
+    """Infer the DB engine from log text so A4 can filter by service."""
+    enabled: bool = True
+    sample_lines: int = 50
+    # Below this the detector returns None: a wrong service filter hides the one
+    # relevant hit, while no filter merely widens the search.
+    min_confidence: float = 0.6
+
+
 class GodEyeConfig(BaseModel):
     callback_url: str | None = None   # POST AnalyzeResponse กลับหา GodEye หลัง /ingest
     callback_timeout: str = "10s"
@@ -152,6 +161,7 @@ class AppConfig(BaseModel):
     ollama: OllamaConfig = OllamaConfig()
     llm: LLMConfig = LLMConfig()
     analysis: AnalysisConfig = AnalysisConfig()
+    service_detection: ServiceDetectionConfig = ServiceDetectionConfig()
 
 
 def _parse_timeout(value: str) -> float:
